@@ -1,6 +1,6 @@
-[submodule "cli"]
-	path = cli
-	url = git@github.com:ryjen/prep
 [submodule "web"]
 	path = web
 	url = git@github.com:ryjen/prep-web
+[submodule "cli"]
+	path = cli
+	url = git@github.com:ryjen/prep-cli
