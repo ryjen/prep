@@ -283,9 +283,8 @@ impl Store {
         for entry in fs::read_dir(&self.staging_root)
             .map_err(|source| io_error("read staging directory", &self.staging_root, source))?
         {
-            let entry = entry.map_err(|source| {
-                io_error("read staging entry", &self.staging_root, source)
-            })?;
+            let entry = entry
+                .map_err(|source| io_error("read staging entry", &self.staging_root, source))?;
             let file_type = entry
                 .file_type()
                 .map_err(|source| io_error("read staging entry type", &entry.path(), source))?;
@@ -344,9 +343,8 @@ impl Store {
         for entry in fs::read_dir(&self.lock_root)
             .map_err(|source| io_error("read staging lease directory", &self.lock_root, source))?
         {
-            let entry = entry.map_err(|source| {
-                io_error("read staging lease entry", &self.lock_root, source)
-            })?;
+            let entry = entry
+                .map_err(|source| io_error("read staging lease entry", &self.lock_root, source))?;
             let path = entry.path();
             if path.extension() != Some(OsStr::new("lock")) {
                 continue;
@@ -423,7 +421,11 @@ impl StoreTransaction {
         if destination.exists() {
             validate_existing_result(&destination, id)?;
             fs::remove_dir_all(&self.staging_path).map_err(|source| {
-                io_error("remove redundant staging result", &self.staging_path, source)
+                io_error(
+                    "remove redundant staging result",
+                    &self.staging_path,
+                    source,
+                )
             })?;
             self.finish_lease()?;
             drop(store_lock);
@@ -650,8 +652,9 @@ fn write_result_metadata(staging_path: &Path, id: &StoreResultId) -> Result<(), 
         result_id: id.as_string(),
         state: "complete".to_owned(),
     };
-    let encoded = toml::to_string(&metadata)
-        .map_err(|error| StoreError::Serialization(format!("serialize result metadata: {error}")))?;
+    let encoded = toml::to_string(&metadata).map_err(|error| {
+        StoreError::Serialization(format!("serialize result metadata: {error}"))
+    })?;
     let path = staging_path.join("result.toml");
     let mut file = OpenOptions::new()
         .write(true)
@@ -668,12 +671,11 @@ fn validate_existing_result(path: &Path, id: &StoreResultId) -> Result<(), Store
     let metadata_path = path.join("result.toml");
     let encoded = fs::read_to_string(&metadata_path)
         .map_err(|source| io_error("read result metadata", &metadata_path, source))?;
-    let metadata: ResultMetadata = toml::from_str(&encoded).map_err(|error| {
-        StoreError::CorruptResult {
+    let metadata: ResultMetadata =
+        toml::from_str(&encoded).map_err(|error| StoreError::CorruptResult {
             path: path.to_path_buf(),
             message: format!("invalid result metadata: {error}"),
-        }
-    })?;
+        })?;
     if metadata.schema != RESULT_SCHEMA_V1
         || metadata.result_id != id.as_string()
         || metadata.state != "complete"
@@ -736,8 +738,8 @@ fn visit_output_tree(root: &Path, directory: &Path) -> Result<(), StoreError> {
 }
 
 fn validate_symlink(root: &Path, path: &Path) -> Result<(), StoreError> {
-    let target = fs::read_link(path)
-        .map_err(|source| io_error("read output symlink", path, source))?;
+    let target =
+        fs::read_link(path).map_err(|source| io_error("read output symlink", path, source))?;
     if target.is_absolute() {
         return Err(StoreError::InvalidOutput {
             path: path.to_path_buf(),
@@ -749,10 +751,12 @@ fn validate_symlink(root: &Path, path: &Path) -> Result<(), StoreError> {
         path: path.to_path_buf(),
         message: "symlink has no parent directory".to_owned(),
     })?;
-    let relative_parent = parent.strip_prefix(root).map_err(|_| StoreError::InvalidOutput {
-        path: path.to_path_buf(),
-        message: "symlink is outside the result prefix".to_owned(),
-    })?;
+    let relative_parent = parent
+        .strip_prefix(root)
+        .map_err(|_| StoreError::InvalidOutput {
+            path: path.to_path_buf(),
+            message: "symlink is outside the result prefix".to_owned(),
+        })?;
 
     let mut components: Vec<OsString> = relative_parent
         .components()
@@ -813,7 +817,10 @@ fn collect_leaf_paths(
     Ok(())
 }
 
-fn compose_path_value(entries: &[PathBuf], base: Option<&OsString>) -> Result<OsString, StoreError> {
+fn compose_path_value(
+    entries: &[PathBuf],
+    base: Option<&OsString>,
+) -> Result<OsString, StoreError> {
     let mut paths = entries.to_vec();
     if let Some(base) = base {
         paths.extend(std::env::split_paths(base));
@@ -829,7 +836,8 @@ fn sync_tree_metadata(staging_path: &Path) -> Result<(), StoreError> {
 }
 
 fn sync_directory(path: &Path) -> Result<(), StoreError> {
-    let file = File::open(path).map_err(|source| io_error("open directory for sync", path, source))?;
+    let file =
+        File::open(path).map_err(|source| io_error("open directory for sync", path, source))?;
     file.sync_all()
         .map_err(|source| io_error("sync directory", path, source))
 }
@@ -949,8 +957,7 @@ mod tests {
     }
 
     fn result_id(byte: &str) -> StoreResultId {
-        StoreResultId::parse(format!("sha256:{}", byte.repeat(64)))
-            .expect("valid result id")
+        StoreResultId::parse(format!("sha256:{}", byte.repeat(64))).expect("valid result id")
     }
 
     #[test]
@@ -985,7 +992,9 @@ mod tests {
         let second_transaction = store.begin().expect("begin second transaction");
         fs::write(second_transaction.prefix().join("other"), b"ignored")
             .expect("write redundant output");
-        let second = second_transaction.commit(&id).expect("reuse existing result");
+        let second = second_transaction
+            .commit(&id)
+            .expect("reuse existing result");
         assert!(matches!(second, PublishOutcome::Existing(_)));
         assert_eq!(
             fs::read(second.result().prefix().join("bin/tool")).expect("read existing result"),
@@ -1037,8 +1046,7 @@ mod tests {
         fs::write(&outside, b"host data").expect("write outside file");
         let store = Store::open(&temp.0.join("store")).expect("open store");
         let transaction = store.begin().expect("begin transaction");
-        fs::hard_link(&outside, transaction.prefix().join("linked"))
-            .expect("create hard link");
+        fs::hard_link(&outside, transaction.prefix().join("linked")).expect("create hard link");
         assert!(matches!(
             transaction.commit(&result_id("c")),
             Err(StoreError::InvalidOutput { .. })
@@ -1068,8 +1076,14 @@ mod tests {
         assert_eq!(plan.path_entries.len(), 2);
         assert_eq!(plan.collisions.len(), 1);
         assert_eq!(plan.collisions[0].relative_path, Path::new("bin/tool"));
-        assert_eq!(fs::read(published[0].prefix().join("bin/tool")).unwrap(), b"one");
-        assert_eq!(fs::read(published[1].prefix().join("bin/tool")).unwrap(), b"two");
+        assert_eq!(
+            fs::read(published[0].prefix().join("bin/tool")).unwrap(),
+            b"one"
+        );
+        assert_eq!(
+            fs::read(published[1].prefix().join("bin/tool")).unwrap(),
+            b"two"
+        );
     }
 
     fn make_tree_writable(path: &Path) -> std::io::Result<()> {
