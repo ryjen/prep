@@ -19,7 +19,17 @@ Prep processes data and code from multiple trust domains:
 
 Assume repository metadata, remote source content, archive entries, and plugin output can be malformed or malicious.
 
-A plugin is executable code. A build is also code execution. Prep 2 does **not** claim that protocol validation alone makes malicious plugins or malicious build scripts safe. The core's job is to minimize ambient authority, make dangerous capabilities visible/policy-controlled, constrain Prep-owned state, and provide a path to stronger platform sandboxing.
+A plugin is executable code. A build is also code execution. Prep 2 does **not** claim that protocol validation or capability declarations make malicious plugins or malicious build scripts safe.
+
+The v1 core must:
+
+- minimize ambient authority it intentionally grants;
+- make dangerous capabilities visible and policy-controlled;
+- validate all data crossing into Prep-owned state;
+- preserve the integrity of Prep-owned caches/stores even when a plugin fails;
+- provide a path to stronger platform sandboxing.
+
+Without an OS sandbox, a malicious plugin or build process can attempt any action available to the invoking user. Documentation and tests must distinguish admission/policy controls from true process containment.
 
 ## 2. Invariant: identifiers are not paths
 
@@ -38,9 +48,9 @@ At minimum reject:
 
 Use typed wrappers such as `PackageName` rather than passing raw `String` through core APIs where practical.
 
-## 3. Invariant: filesystem roots are explicit and contained
+## 3. Invariant: Prep-owned filesystem roots are explicit and contained
 
-Every operation that writes files receives an explicit root owned by the core.
+Every **core-owned** filesystem write operates relative to an explicit root.
 
 For any derived path:
 
@@ -59,9 +69,11 @@ Containment checks must account for:
 
 A path that cannot be proven contained fails closed.
 
+Plugins receive explicit source/build/staging roots and conforming plugins are required to use them. The core never publishes plugin output outside validated staging roots. Strong prevention of arbitrary plugin writes elsewhere on the host requires platform sandboxing and is not falsely claimed by v1.
+
 ## 4. Invariant: archive extraction cannot escape staging
 
-Archive extraction is a security boundary.
+Archive extraction is a trusted-core security boundary in v1.
 
 Reject or safely handle entries containing:
 
@@ -80,7 +92,7 @@ Extraction limits should include configurable bounds on:
 - path length;
 - nesting depth where library support permits it.
 
-Digest verification occurs before extraction when the source type provides a digest.
+Digest verification occurs before extraction.
 
 ## 5. Invariant: normal execution uses immutable source identity
 
@@ -99,9 +111,11 @@ Archive:
 
 Local development paths are explicitly marked non-immutable and cannot silently populate globally reusable cache entries as if they were verified remote inputs.
 
-## 6. Invariant: host mutation is denied by default
+Git/archive begin as built-in Rust providers under ADR 0003 so the v1 immutable-source trust boundary does not depend on assertions from arbitrary executable plugins.
 
-Resolving or building a dependency must not silently invoke `apt`, Homebrew, `sudo`, or another host package manager.
+## 6. Invariant: Prep never authorizes host mutation by default
+
+Resolving or building a dependency must not cause Prep to intentionally invoke `apt`, Homebrew, `sudo`, or another host package manager as an invisible fallback.
 
 Host mutation requires:
 
@@ -111,6 +125,8 @@ Host mutation requires:
 4. a visible plan or user approval unless noninteractive policy explicitly permits it.
 
 The preferred default for host packages is **probe**, not mutate.
+
+This is an authorization invariant. Without OS containment, malicious executable code may still attempt host mutation independently of Prep. Prep must not describe capability declarations as a sandbox.
 
 ## 7. Invariant: plugin control traffic is data, never shell source
 
@@ -138,9 +154,11 @@ Special attention is required for variables that alter dynamic loading or tool e
 
 The exact allow/deny model belongs to process policy and may differ between a trusted development build and a hardened execution mode.
 
+Environment sanitization reduces accidental/ambient influence; it is not process containment.
+
 ## 9. Invariant: store publication is transactional
 
-A build plugin writes to staging, never directly to a published immutable result.
+A build plugin writes intended outputs to staging, never directly to a published immutable result through Prep APIs.
 
 Publication follows:
 
@@ -162,7 +180,7 @@ Activation composes prefixes; it does not copy/symlink package output into a sin
 
 Name collisions are represented and diagnosed rather than resolved by overwriting another package's files.
 
-## 11. Invariant: plugin execution is bounded
+## 11. Invariant: plugin execution is bounded from Prep's perspective
 
 Every plugin invocation has finite limits:
 
@@ -171,9 +189,12 @@ Every plugin invocation has finite limits:
 - maximum diagnostic/output volume;
 - bounded prompt behavior;
 - cancellation path;
+- immediate-child and process-tree cleanup strategy;
 - child-process reaping.
 
 A plugin crash, hang, malformed response, or premature exit is a failure, never success.
+
+Platform-specific tests must verify that timeout/cancellation do not leave ordinary plugin child processes running indefinitely. A malicious process deliberately escaping its process group/job boundary is a sandbox-hardening problem and must not be hidden by stronger claims than the implementation supports.
 
 ## 12. Invariant: parsing failures do not terminate the process unexpectedly
 
@@ -193,7 +214,8 @@ For security-relevant actions, Prep should be able to explain:
 - which plugin/capability was selected;
 - which policy allowed or denied it;
 - which immutable source identity was used;
-- whether host mutation/privilege/network access occurred;
+- which plugin content identity affected a build;
+- whether Prep authorized host mutation/privilege/network-dependent behavior;
 - which result identity was published.
 
 The initial implementation can record this in structured logs/store metadata; a more general provenance/evidence format may follow later.
@@ -210,13 +232,23 @@ Secret prompt responses, tokens, passwords, and credentials must not be written 
 
 Plugins requiring credentials should consume brokered secret input or a narrowly provided credential mechanism.
 
-## 15. Invariant: offline means no network
+## 15. Invariant: offline mode does not authorize network-dependent work
 
-When offline mode is enabled, a plugin operation declaring `network` is denied unless it can satisfy the operation from verified local state without performing network access.
+When offline mode is enabled, Prep refuses to schedule an operation that declares/requires network access unless the operation can be satisfied from verified local state without network use.
 
-The core should test this policy using synthetic plugins and, where possible, platform-level network isolation in hardened test jobs.
+Built-in Git/archive providers must obey this directly.
 
-## 16. Security verification gates
+For external plugins, this is an admission-policy guarantee. **Strong proof that a malicious plugin cannot access the network requires platform network isolation.** Hardened runners should add that enforcement where available, but v1 must not describe policy alone as a network sandbox.
+
+## 16. Invariant: plugin distribution does not silently become remote code execution
+
+Under ADR 0005, protocol v1 permits official/bundled or explicitly installed local plugins. Prep records content identity for the plugin code/manifest used.
+
+There is no automatic remote plugin installation or update path in v1.
+
+Adding one requires a separate security design covering provenance/signatures, trust roots, namespace ownership, update/rollback behavior, and capability review.
+
+## 17. Security verification gates
 
 Before a Prep 2 alpha is considered usable for real dependency builds, CI must include at minimum:
 
@@ -230,10 +262,11 @@ Before a Prep 2 alpha is considered usable for real dependency builds, CI must i
 - archive traversal fixtures;
 - malicious identifier/path fixtures;
 - malformed/oversized protocol frames;
-- plugin crash/hang/cancellation cases;
-- interrupted store transaction recovery tests.
+- plugin crash/hang/cancellation/process-tree cases;
+- interrupted store transaction recovery tests;
+- tests that distinguish admission-policy behavior from any platform sandbox enforcement.
 
-## 17. Security design review trigger
+## 18. Security design review trigger
 
 Changes require explicit security review when they introduce or expand:
 
@@ -241,6 +274,7 @@ Changes require explicit security review when they introduce or expand:
 - host package mutation;
 - plugin installation/update from remote sources;
 - new archive/filesystem extraction behavior;
+- external source-provider plugins;
 - new network source types;
 - shared writable global state;
 - secret handling;
