@@ -9,49 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  review-patch:
-    name: One-time final #4 review patch
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/manifest-lock-identity'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.head_ref }}
-      - name: Align source schema and fail-closed parsing
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          doc_path = Path("docs/design/prep-2.md")
-          doc = doc_path.read_text()
-          replacements = {
-              "[dependencies.source.git]\nurl = \"https://github.com/fmtlib/fmt\"": "[dependencies.source]\nkind = \"git\"\nurl = \"https://github.com/fmtlib/fmt\"",
-              "[dependencies.source.archive]\nurl = \"https://example.invalid/libfoo-1.2.3.tar.gz\"": "[dependencies.source]\nkind = \"archive\"\nurl = \"https://example.invalid/libfoo-1.2.3.tar.gz\"",
-          }
-          for old, new in replacements.items():
-              if old not in doc:
-                  raise SystemExit(f"expected design fragment not found: {old!r}")
-              doc = doc.replace(old, new, 1)
-          doc_path.write_text(doc)
-
-          manifest_path = Path("crates/prep-manifest/src/lib.rs")
-          manifest = manifest_path.read_text()
-          marker = '#[serde(tag = "kind", rename_all = "snake_case")]'
-          if manifest.count(marker) != 2:
-              raise SystemExit(f"expected exactly two tagged source enums, found {manifest.count(marker)}")
-          manifest = manifest.replace(marker, marker + '\n#[serde(deny_unknown_fields)]')
-          manifest_path.write_text(manifest)
-          PY
-      - name: Commit final review fixes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/design/prep-2.md crates/prep-manifest/src/lib.rs
-          git commit -m "fix: align source schema validation"
-          git push origin HEAD:${{ github.head_ref }}
-
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
