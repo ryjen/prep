@@ -21,13 +21,19 @@ pub struct PluginProbe {
 #[derive(Debug)]
 pub enum PluginProbeError {
     Spawn(io::Error),
-    Io { operation: &'static str, source: io::Error },
+    Io {
+        operation: &'static str,
+        source: io::Error,
+    },
     Protocol(String),
     UnexpectedEof,
     MissingNewline,
     InvalidHandshake(String),
     InvalidResult(String),
-    PluginReturnedError { code: String, message: String },
+    PluginReturnedError {
+        code: String,
+        message: String,
+    },
     ProcessFailed(Option<i32>),
 }
 
@@ -35,16 +41,24 @@ impl fmt::Display for PluginProbeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Spawn(error) => write!(formatter, "failed to spawn plugin: {error}"),
-            Self::Io { operation, source } => write!(formatter, "plugin {operation} failed: {source}"),
+            Self::Io { operation, source } => {
+                write!(formatter, "plugin {operation} failed: {source}")
+            }
             Self::Protocol(message) => write!(formatter, "plugin protocol error: {message}"),
-            Self::UnexpectedEof => write!(formatter, "plugin closed stdout before a complete response"),
+            Self::UnexpectedEof => {
+                write!(formatter, "plugin closed stdout before a complete response")
+            }
             Self::MissingNewline => write!(formatter, "plugin response was not newline-delimited"),
-            Self::InvalidHandshake(message) => write!(formatter, "invalid plugin handshake: {message}"),
+            Self::InvalidHandshake(message) => {
+                write!(formatter, "invalid plugin handshake: {message}")
+            }
             Self::InvalidResult(message) => write!(formatter, "invalid plugin result: {message}"),
             Self::PluginReturnedError { code, message } => {
                 write!(formatter, "plugin returned {code}: {message}")
             }
-            Self::ProcessFailed(code) => write!(formatter, "plugin process failed with status {code:?}"),
+            Self::ProcessFailed(code) => {
+                write!(formatter, "plugin process failed with status {code:?}")
+            }
         }
     }
 }
@@ -76,7 +90,10 @@ pub fn probe_build_system(executable: &Path) -> Result<PluginProbe, PluginProbeE
     let mut stdout = BufReader::new(stdout);
 
     let interaction = (|| {
-        write_protocol_frame(&mut stdin, &HelloFrame::new(HELLO_ID, env!("CARGO_PKG_VERSION")))?;
+        write_protocol_frame(
+            &mut stdin,
+            &HelloFrame::new(HELLO_ID, env!("CARGO_PKG_VERSION")),
+        )?;
         let hello_line = read_bounded_line(&mut stdout)?;
         let hello: HelloResultFrame = decode_frame(&hello_line, DEFAULT_MAX_FRAME_BYTES)
             .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
@@ -200,7 +217,8 @@ fn write_protocol_frame<T: serde::Serialize>(
     writer: &mut impl Write,
     frame: &T,
 ) -> Result<(), PluginProbeError> {
-    let encoded = encode_frame(frame).map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
+    let encoded =
+        encode_frame(frame).map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
     writer
         .write_all(encoded.as_bytes())
         .and_then(|()| writer.write_all(b"\n"))
