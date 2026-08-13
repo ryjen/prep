@@ -6,10 +6,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GraphError {
     InvalidLock(String),
-    MissingPackage {
-        package: String,
-        dependency: String,
-    },
+    MissingPackage { package: String, dependency: String },
     Cycle(Vec<String>),
 }
 
@@ -95,13 +92,7 @@ impl DependencyGraph {
         let mut order = Vec::new();
 
         for root in &self.roots {
-            self.visit(
-                root,
-                &mut permanent,
-                &mut temporary,
-                &mut stack,
-                &mut order,
-            )?;
+            self.visit(root, &mut permanent, &mut temporary, &mut stack, &mut order)?;
         }
 
         Ok(order)
@@ -169,9 +160,7 @@ mod tests {
                 }
                 text.push_str(&format!("\"{dependency}\""));
             }
-            text.push_str(
-                "]\n[package.source]\nkind = \"path\"\npath = \"fixture\"\n",
-            );
+            text.push_str("]\n[package.source]\nkind = \"path\"\npath = \"fixture\"\n");
         }
 
         Lockfile::parse(&text).expect("fixture lock should parse")

@@ -15,8 +15,7 @@ impl ResultId {
                 "result identity must use sha256:<hex> form".to_owned(),
             ));
         };
-        Sha256Digest::parse(digest)
-            .map_err(|error| IdentityError::Invalid(error.to_string()))?;
+        Sha256Digest::parse(digest).map_err(|error| IdentityError::Invalid(error.to_string()))?;
         Ok(Self(format!("sha256:{}", digest.to_ascii_lowercase())))
     }
 
@@ -168,7 +167,9 @@ fn validate_scalar(label: &str, value: &str) -> Result<(), IdentityError> {
         return Err(IdentityError::Invalid(format!("{label} must not be empty")));
     }
     if value.len() > 16 * 1024 {
-        return Err(IdentityError::Invalid(format!("{label} is unreasonably large")));
+        return Err(IdentityError::Invalid(format!(
+            "{label} is unreasonably large"
+        )));
     }
     if value.contains('\0') {
         return Err(IdentityError::Invalid(format!("{label} contains NUL")));
@@ -241,8 +242,7 @@ mod tests {
             },
             dependencies: vec![DependencyResult {
                 package: PackageName::parse("dep").expect("package"),
-                result: ResultId::parse(format!("sha256:{}", "11".repeat(32)))
-                    .expect("result id"),
+                result: ResultId::parse(format!("sha256:{}", "11".repeat(32))).expect("result id"),
             }],
             target: "x86_64-unknown-linux-gnu".to_owned(),
             toolchain: ToolIdentity {
@@ -274,12 +274,13 @@ mod tests {
             0,
             DependencyResult {
                 package: PackageName::parse("alpha").expect("package"),
-                result: ResultId::parse(format!("sha256:{}", "33".repeat(32)))
-                    .expect("result id"),
+                result: ResultId::parse(format!("sha256:{}", "33".repeat(32))).expect("result id"),
             },
         );
         let mut first_with_alpha = first.clone();
-        first_with_alpha.dependencies.push(second.dependencies[0].clone());
+        first_with_alpha
+            .dependencies
+            .push(second.dependencies[0].clone());
         assert_eq!(
             first_with_alpha.result_identity().expect("identity"),
             second.result_identity().expect("identity")
@@ -292,7 +293,10 @@ mod tests {
 
         let mut compiler = base();
         compiler.toolchain.version = "clang 21.0".to_owned();
-        assert_ne!(baseline, compiler.result_identity().expect("compiler identity"));
+        assert_ne!(
+            baseline,
+            compiler.result_identity().expect("compiler identity")
+        );
 
         let mut target = base();
         target.target = "aarch64-apple-darwin".to_owned();
@@ -319,7 +323,9 @@ mod tests {
             .insert("build_type".to_owned(), "debug".to_owned());
         assert_ne!(
             baseline,
-            configuration.result_identity().expect("configuration identity")
+            configuration
+                .result_identity()
+                .expect("configuration identity")
         );
     }
 

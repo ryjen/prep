@@ -74,9 +74,10 @@ fn validate_name(value: &str) -> Result<(), ModelError> {
     if matches!(value, "." | "..") {
         return Err(ModelError::new("identifier must not be '.' or '..'"));
     }
-    if !value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
-    }) {
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+    {
         return Err(ModelError::new(
             "identifier may contain only ASCII letters, digits, '.', '_' and '-'",
         ));
@@ -103,12 +104,11 @@ fn validate_version(value: &str) -> Result<(), ModelError> {
     if matches!(value, "." | "..") {
         return Err(ModelError::new("version must not be '.' or '..'"));
     }
-    if !value.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+')
-    }) {
-        return Err(ModelError::new(
-            "version contains unsupported characters",
-        ));
+    if !value
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'+'))
+    {
+        return Err(ModelError::new("version contains unsupported characters"));
     }
     Ok(())
 }
@@ -121,7 +121,9 @@ fn validate_reference(value: &str) -> Result<(), ModelError> {
         return Err(ModelError::new("source reference exceeds 512 bytes"));
     }
     if value.chars().any(char::is_control) {
-        return Err(ModelError::new("source reference contains control characters"));
+        return Err(ModelError::new(
+            "source reference contains control characters",
+        ));
     }
     Ok(())
 }
@@ -133,7 +135,10 @@ fn validate_url(value: &str) -> Result<(), ModelError> {
     if value.len() > 4096 {
         return Err(ModelError::new("source URL exceeds 4096 bytes"));
     }
-    if value.chars().any(|character| character.is_control() || character.is_whitespace()) {
+    if value
+        .chars()
+        .any(|character| character.is_control() || character.is_whitespace())
+    {
         return Err(ModelError::new(
             "source URL contains whitespace or control characters",
         ));
@@ -495,7 +500,8 @@ impl Lockfile {
     pub fn validate_against(&self, manifest: &Manifest) -> Result<(), ModelError> {
         self.validate()?;
         manifest.validate()?;
-        if self.root.name != manifest.package.name || self.root.version != manifest.package.version {
+        if self.root.name != manifest.package.name || self.root.version != manifest.package.version
+        {
             return Err(ModelError::new(
                 "lock root package identity does not match manifest",
             ));
@@ -522,7 +528,9 @@ impl Lockfile {
 
         for (name, declaration) in declared {
             let package = locked.get(&name).ok_or_else(|| {
-                ModelError::new(format!("manifest dependency {name} is missing from lockfile"))
+                ModelError::new(format!(
+                    "manifest dependency {name} is missing from lockfile"
+                ))
             })?;
             if package.version != declaration.version {
                 return Err(ModelError::new(format!(
@@ -530,7 +538,9 @@ impl Lockfile {
                 )));
             }
             validate_source_match(&declaration.source, &package.source).map_err(|error| {
-                ModelError::new(format!("locked source for {name} does not match manifest: {error}"))
+                ModelError::new(format!(
+                    "locked source for {name} does not match manifest: {error}"
+                ))
             })?;
         }
         Ok(())
@@ -540,7 +550,9 @@ impl Lockfile {
         self.validate()?;
         let mut normalized = self.clone();
         normalized.root.dependencies.sort();
-        normalized.packages.sort_by(|left, right| left.name.cmp(&right.name));
+        normalized
+            .packages
+            .sort_by(|left, right| left.name.cmp(&right.name));
         for package in &mut normalized.packages {
             package.dependencies.sort();
         }
@@ -572,10 +584,11 @@ fn validate_source_match(
         ) if url == locked_url && sha256.as_ref().is_none_or(|digest| digest == locked_digest) => {
             Ok(())
         }
-        (
-            SourceDeclaration::Path { path },
-            LockedSource::Path { path: locked_path },
-        ) if path == locked_path => Ok(()),
+        (SourceDeclaration::Path { path }, LockedSource::Path { path: locked_path })
+            if path == locked_path =>
+        {
+            Ok(())
+        }
         _ => Err(ModelError::new("source kind or declared identity differs")),
     }
 }
@@ -662,7 +675,12 @@ version = "0.1.0"
     #[test]
     fn unknown_schema_and_unknown_fields_fail_closed() {
         assert!(Manifest::parse(&MANIFEST.replace("prep/1", "prep/99")).is_err());
-        assert!(Manifest::parse(&MANIFEST.replace("version = \"1.0.0\"", "version = \"1.0.0\"\nextra = true")).is_err());
+        assert!(
+            Manifest::parse(
+                &MANIFEST.replace("version = \"1.0.0\"", "version = \"1.0.0\"\nextra = true")
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -686,8 +704,10 @@ version = "0.1.0"
     #[test]
     fn lock_source_mismatch_is_rejected() {
         let manifest = Manifest::parse(MANIFEST).expect("manifest should parse");
-        let lock = Lockfile::parse(&LOCK.replace("requested_ref = \"11.2.0\"", "requested_ref = \"main\""))
-            .expect("lock remains structurally valid");
+        let lock = Lockfile::parse(
+            &LOCK.replace("requested_ref = \"11.2.0\"", "requested_ref = \"main\""),
+        )
+        .expect("lock remains structurally valid");
         assert!(lock.validate_against(&manifest).is_err());
     }
 }
