@@ -9,35 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  bootstrap-review:
-    name: One-time #4 bootstrap
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/manifest-lock-identity'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.head_ref }}
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
-        with:
-          toolchain: 1.97.1
-          components: rustfmt
-      - name: Generate lock and apply rustfmt
-        run: |
-          cargo generate-lockfile
-          cargo fmt --all
-          cargo fmt --manifest-path fuzz/Cargo.toml --all
-      - name: Commit mechanical bootstrap changes
-        run: |
-          if [[ -n "$(git status --porcelain -- Cargo.lock crates fuzz)" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add Cargo.lock crates fuzz
-            git commit -m "chore: format and lock manifest identity work"
-            git push origin HEAD:${{ github.head_ref }}
-          fi
-
   rust:
     name: Rust (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -51,10 +22,6 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
-      - name: Regenerate dependency lock for bootstrap review
-        run: cargo generate-lockfile
-      - name: Apply formatting for bootstrap review
-        run: cargo fmt --all
       - name: Format
         run: cargo fmt --all -- --check
       - name: Check
@@ -72,8 +39,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           toolchain: 1.97.1
-      - name: Regenerate dependency lock for bootstrap review
-        run: cargo generate-lockfile
       - name: Install cargo-deny
         run: cargo install cargo-deny --version 0.20.2 --locked
       - name: Dependency policy
