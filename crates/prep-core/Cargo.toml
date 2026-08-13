@@ -3,9 +3,10 @@ name = "prep-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+publish = false
 
 [dependencies]
-prep-protocol = { path = "../prep-protocol" }
+prep-protocol = { path = "../prep-protocol", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 
