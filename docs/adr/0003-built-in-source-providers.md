@@ -11,13 +11,13 @@ Prep's original architecture treated Git and archive resolution as ordinary exec
 - archive extraction must enforce filesystem containment and resource limits;
 - source-cache/offline behavior must preserve the same identity semantics.
 
-The external plugin protocol can represent resolver operations, but making the first Git/archive implementation a third-party-style executable would force the core either to trust plugin assertions about source identity or independently reimplement much of the verification logic anyway.
+Making the first Git/archive implementation a third-party-style executable would force the core either to trust plugin assertions about source identity or independently reimplement much of the verification logic anyway.
 
 ## Decision
 
 Implement **Git and archive as built-in Rust source providers for Prep 2 v1**, behind a narrow internal `SourceProvider`-style interface.
 
-Keep resolver operations in `prep.plugin/1` as an extensibility point for future source types, but do not make external resolver plugins necessary to bootstrap or enforce the v1 trust model.
+External source-provider operations are **not part of the required `prep.plugin/1` v1 surface**. The architecture preserves the possibility of a later protocol extension for new source types once the core can independently validate provider output and plugin provenance is mature.
 
 ## Core ownership
 
@@ -31,21 +31,24 @@ The core/source subsystem owns:
 - submodule policy/identity;
 - transition from resolved → verified → materialized source.
 
-External source plugins, when enabled later, must return data that the core can validate before a source becomes trusted/published.
+Any future external source provider must return data/materialized state that the core can validate before a source becomes trusted or eligible for build execution.
 
 ## Rationale
 
-This keeps the smallest security-critical source types inside the memory-safe, fuzzed core while retaining plugin extensibility where it is valuable.
+This keeps the smallest security-critical source types inside the memory-safe, fuzzed core while retaining a future extensibility path where it is valuable.
 
 It also reduces the v1 bootstrap dependency cycle: Prep does not need a working plugin installation/provenance system merely to securely fetch its first dependency.
+
+Deferring unused source-plugin operations also follows economy of mechanism: protocol v1 should contain only operations exercised by the initial implementation and conformance suite.
 
 ## Consequences
 
 - `plugins/git` and `plugins/archive` are not required as external v1 runtime components.
 - Historical Git/archive plugin behavior remains useful as characterization input only.
 - Build-system plugins remain external process plugins and continue proving the language-neutral architecture.
-- A future external source plugin API must not be able to bypass core integrity/containment validation.
+- The initial protocol conformance suite does not need resolver operations.
+- A future external source-provider API must not bypass core identity, integrity, or containment validation.
 
 ## Revisit when
 
-Revisit after protocol v1, plugin provenance, and source verification contracts are stable enough that an external provider can be treated as an untrusted mechanism whose output is independently validated by the core.
+Revisit after protocol v1, local plugin provenance, and source verification contracts are stable enough that an external provider can be treated as an untrusted mechanism whose output is independently validated by the core, and a real new source type justifies expanding the protocol.
