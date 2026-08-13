@@ -2,6 +2,7 @@
 members = [
   "crates/prep-cli",
   "crates/prep-core",
+  "crates/prep-manifest",
   "crates/prep-protocol",
   "crates/prep-test-support",
 ]
@@ -16,6 +17,8 @@ rust-version = "1.97.1"
 [workspace.dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha2 = "0.10"
+toml = "0.9"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

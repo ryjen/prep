@@ -1,16 +1,16 @@
 [package]
-name = "prep-core"
+name = "prep-manifest"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish = false
 
 [dependencies]
-prep-manifest = { path = "../prep-manifest", version = "0.1.0" }
-prep-protocol = { path = "../prep-protocol", version = "0.1.0" }
 serde.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
 serde_json.workspace = true
-sha2.workspace = true
 
 [lints]
 workspace = true

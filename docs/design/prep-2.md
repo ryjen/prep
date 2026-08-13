@@ -136,7 +136,8 @@ systems = ["cmake", "ninja"]
 name = "fmt"
 version = "11.2.0"
 
-[dependencies.source.git]
+[dependencies.source]
+kind = "git"
 url = "https://github.com/fmtlib/fmt"
 ref = "11.2.0"
 ```
@@ -146,7 +147,8 @@ The manifest may contain a mutable `ref` for human convenience. It is **not** th
 Archive dependencies use a cryptographic content identity:
 
 ```toml
-[dependencies.source.archive]
+[dependencies.source]
+kind = "archive"
 url = "https://example.invalid/libfoo-1.2.3.tar.gz"
 sha256 = "..."
 ```

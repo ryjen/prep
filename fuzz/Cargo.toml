@@ -9,11 +9,26 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+prep-manifest = { path = "../crates/prep-manifest" }
 prep-protocol = { path = "../crates/prep-protocol" }
 
 [[bin]]
 name = "protocol_frame"
 path = "fuzz_targets/protocol_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest_toml"
+path = "fuzz_targets/manifest_toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lock_toml"
+path = "fuzz_targets/lock_toml.rs"
 test = false
 doc = false
 bench = false

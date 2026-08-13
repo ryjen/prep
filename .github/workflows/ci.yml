@@ -45,7 +45,7 @@ jobs:
         run: cargo deny --locked check
 
   fuzz-smoke:
-    name: Protocol fuzz smoke
+    name: Parser fuzz smoke
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -54,5 +54,8 @@ jobs:
           toolchain: nightly-2026-08-13
       - name: Install cargo-fuzz
         run: cargo +nightly-2026-08-13 install cargo-fuzz --version 0.13.2 --locked
-      - name: Run bounded protocol fuzz target
-        run: cargo +nightly-2026-08-13 fuzz run protocol_frame -- -max_total_time=10
+      - name: Run bounded fuzz targets
+        run: |
+          cargo +nightly-2026-08-13 fuzz run protocol_frame -- -max_total_time=5
+          cargo +nightly-2026-08-13 fuzz run manifest_toml -- -max_total_time=5
+          cargo +nightly-2026-08-13 fuzz run lock_toml -- -max_total_time=5
