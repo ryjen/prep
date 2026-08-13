@@ -275,6 +275,7 @@ pub struct BuildDeclaration {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum SourceDeclaration {
     Git {
         url: SourceUrl,
@@ -372,6 +373,7 @@ pub struct ProviderIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(deny_unknown_fields)]
 pub enum LockedSource {
     Git {
         url: SourceUrl,
