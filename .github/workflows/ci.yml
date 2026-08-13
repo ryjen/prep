@@ -9,7 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  # PREP_ONE_TIME_REVIEW_PATCH_BEGIN
   review-patch:
     name: One-time final #4 review patch
     if: github.event_name == 'pull_request' && github.head_ref == 'agent/manifest-lock-identity'
@@ -42,26 +41,16 @@ jobs:
           marker = '#[serde(tag = "kind", rename_all = "snake_case")]'
           if manifest.count(marker) != 2:
               raise SystemExit(f"expected exactly two tagged source enums, found {manifest.count(marker)}")
-          manifest = manifest.replace(
-              marker,
-              marker + '\n#[serde(deny_unknown_fields)]',
-          )
+          manifest = manifest.replace(marker, marker + '\n#[serde(deny_unknown_fields)]')
           manifest_path.write_text(manifest)
-
-          workflow_path = Path(".github/workflows/ci.yml")
-          lines = workflow_path.read_text().splitlines(keepends=True)
-          begin = next(i for i, line in enumerate(lines) if line.strip() == "# PREP_ONE_TIME_REVIEW_PATCH_BEGIN")
-          end = next(i for i, line in enumerate(lines) if line.strip() == "# PREP_ONE_TIME_REVIEW_PATCH_END")
-          workflow_path.write_text("".join(lines[:begin] + lines[end + 1 :]))
           PY
-      - name: Commit final review fixes and remove patch job
+      - name: Commit final review fixes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/design/prep-2.md crates/prep-manifest/src/lib.rs .github/workflows/ci.yml
+          git add docs/design/prep-2.md crates/prep-manifest/src/lib.rs
           git commit -m "fix: align source schema validation"
           git push origin HEAD:${{ github.head_ref }}
-  # PREP_ONE_TIME_REVIEW_PATCH_END
 
   rust:
     name: Rust (${{ matrix.os }})
