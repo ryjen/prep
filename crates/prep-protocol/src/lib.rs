@@ -41,7 +41,7 @@ pub fn encode_frame<T: Serialize>(frame: &T) -> Result<String, serde_json::Error
 }
 
 pub fn decode_frame<T: DeserializeOwned>(line: &str, maximum: usize) -> Result<T, CodecError> {
-    let frame = line.trim_end_matches(|character| character == '\r' || character == '\n');
+    let frame = line.trim_end_matches(['\r', '\n']);
     if frame.is_empty() {
         return Err(CodecError::EmptyFrame);
     }
