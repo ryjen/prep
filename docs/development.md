@@ -1,6 +1,6 @@
 # Development
 
-Prep 2 currently requires the stable Rust toolchain described by `rust-toolchain.toml`.
+Prep 2 uses the pinned Rust toolchain described by `rust-toolchain.toml`.
 
 ## Local quality checks
 
@@ -8,24 +8,26 @@ Run the same deterministic checks as CI:
 
 ```sh
 cargo fmt --all -- --check
-cargo check --workspace --all-targets --all-features
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-python3 scripts/check-licenses.py
+cargo check --locked --workspace --all-targets --all-features
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
 ```
 
-Dependency advisory checking requires `cargo-audit`:
+Dependency license, advisory, duplicate, wildcard, and source policy is enforced with pinned `cargo-deny`:
 
 ```sh
-cargo install cargo-audit --locked
-cargo audit
+cargo install cargo-deny --version 0.20.2 --locked
+cargo deny --locked check
 ```
 
-The bounded fuzz smoke target requires nightly Rust and `cargo-fuzz`:
+The root `Cargo.lock` is committed. Normal build/test/policy workflows must not silently resolve a different dependency graph.
+
+The bounded fuzz smoke target requires the pinned nightly toolchain and `cargo-fuzz` version used by CI:
 
 ```sh
-cargo +nightly install cargo-fuzz --locked
-cargo +nightly fuzz run protocol_frame -- -max_total_time=10
+rustup toolchain install nightly-2026-08-13
+cargo +nightly-2026-08-13 install cargo-fuzz --version 0.13.2 --locked
+cargo +nightly-2026-08-13 fuzz run protocol_frame -- -max_total_time=10
 ```
 
 ## Bootstrap protocol smoke path
@@ -33,8 +35,8 @@ cargo +nightly fuzz run protocol_frame -- -max_total_time=10
 Issue #3 includes one deliberately internal command used to prove the process boundary before real build plugins are implemented:
 
 ```sh
-cargo build --workspace
-cargo run -p prep-cli -- internal probe-plugin ./target/debug/prep-synthetic-plugin
+cargo build --locked --workspace
+cargo run --locked -p prep-cli -- internal probe-plugin ./target/debug/prep-synthetic-plugin
 ```
 
 The path exercises:
@@ -45,6 +47,6 @@ prep CLI → prep-core → external process → prep.plugin/1 NDJSON → validat
 
 The command is not a stable user-facing interface. It exists as a characterization/conformance seam and may move into dedicated test tooling as the plugin host from issue #6 takes shape.
 
-## Scope discipline
+## Bootstrap scope
 
 The bootstrap intentionally does not add manifest, dependency graph, store, Git/archive, or real build-plugin implementation. Those belong to issues #4 onward after their invariants are represented by dedicated types and tests.
