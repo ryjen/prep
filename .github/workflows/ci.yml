@@ -24,6 +24,17 @@ jobs:
           components: rustfmt, clippy
       - name: Regenerate dependency lock for bootstrap review
         run: cargo generate-lockfile
+      - name: Apply formatting for bootstrap review
+        run: cargo fmt --all
+      - name: Emit formatted source
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          for file in crates/prep-core/src/graph.rs crates/prep-core/src/identity.rs crates/prep-manifest/src/lib.rs crates/prep-manifest/tests/legacy_package_json.rs; do
+            echo "PREP_FORMATTED_BEGIN:$file"
+            base64 -w 0 "$file"
+            echo
+            echo "PREP_FORMATTED_END:$file"
+          done
       - name: Format
         run: cargo fmt --all -- --check
       - name: Check
