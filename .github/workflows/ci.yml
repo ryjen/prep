@@ -38,6 +38,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: License policy
         run: python3 scripts/check-licenses.py
+      - name: Bootstrap lockfile
+        run: |
+          echo PREP_CARGO_LOCK_BEGIN
+          base64 -w 0 Cargo.lock
+          echo
+          echo PREP_CARGO_LOCK_END
       - name: Advisory audit
         run: |
           cargo install cargo-audit --locked
