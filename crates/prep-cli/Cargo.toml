@@ -1,0 +1,16 @@
+[package]
+name = "prep-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "prep"
+path = "src/main.rs"
+
+[dependencies]
+prep-core = { path = "../prep-core", version = "0.1.0" }
+
+[lints]
+workspace = true

@@ -1,0 +1,17 @@
+[package]
+name = "prep-test-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+prep-protocol = { path = "../prep-protocol", version = "0.1.0" }
+serde_json.workspace = true
+
+[dev-dependencies]
+prep-cli = { path = "../prep-cli", version = "0.1.0" }
+prep-core = { path = "../prep-core", version = "0.1.0" }
+
+[lints]
+workspace = true
