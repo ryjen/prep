@@ -1,0 +1,26 @@
+[workspace]
+members = [
+  "crates/prep-cli",
+  "crates/prep-core",
+  "crates/prep-protocol",
+  "crates/prep-test-support",
+]
+exclude = ["fuzz"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"

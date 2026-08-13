@@ -1,21 +1,21 @@
 # Prep
 
-Prep is being redesigned as a small, security-conscious package and build orchestration tool for native projects.
+Prep is a small, security-conscious package and build orchestration tool for native projects.
 
-The original Prep implementation proved the central idea: a compact core can own package state and orchestration while language-neutral plugins provide bounded build and extension capabilities. The current design phase keeps that idea, but replaces implicit trust, mutable source resolution, ad-hoc process protocols, and filesystem overlays with explicit identities, policy, isolation boundaries, and transactional state.
+The original Prep implementation proved the central idea: a compact core can own package state and orchestration while language-neutral plugins provide bounded build and extension capabilities. Prep 2 keeps that idea, but replaces implicit trust, mutable source resolution, ad-hoc process protocols, and filesystem overlays with explicit identities, policy, isolation boundaries, and transactional state.
 
 ## Status
 
-**Prep 2 is in design.** The historical `cli` and `web` submodules remain in this repository as reference material during the design phase; they are not the target architecture.
+**Prep 2 implementation has started from the accepted design baseline.** The historical `cli` and `web` submodules remain in this repository as reference material during migration; they are not the target architecture or active implementation path.
 
-The proposed implementation uses:
+The implementation direction uses:
 
 - Rust 2024 for the core and CLI;
 - built-in Rust Git/archive source providers for the v1 immutable-source trust boundary;
 - a language-neutral, versioned JSON plugin protocol for build capabilities and future extension points;
 - immutable source identities and a generated, checked-in TOML lockfile;
-- build result identities that include target/toolchain and dependency inputs;
-- isolated per-package install prefixes rather than a shared symlink overlay;
+- build result identities that include compiler/target/build-tool and dependency inputs;
+- isolated per-package install prefixes with same-filesystem transactional publication rather than a shared symlink overlay;
 - fail-closed validation and typed errors;
 - explicit capability declarations for plugins and host mutation;
 - explicit local/content-identified plugins in v1, with remote plugin installation deferred;
@@ -31,7 +31,9 @@ The proposed implementation uses:
 - [`docs/adr/0003-built-in-source-providers.md`](docs/adr/0003-built-in-source-providers.md) — trusted Git/archive bootstrap decision
 - [`docs/adr/0004-lockfile-and-build-identity.md`](docs/adr/0004-lockfile-and-build-identity.md) — lockfile and native cache identity decision
 - [`docs/adr/0005-local-plugin-provenance.md`](docs/adr/0005-local-plugin-provenance.md) — v1 plugin distribution/provenance boundary
+- [`docs/adr/0006-transactional-publication-and-tool-identity.md`](docs/adr/0006-transactional-publication-and-tool-identity.md) — atomic publication and output-affecting tool identity
 - [`docs/roadmap.md`](docs/roadmap.md) — staged implementation plan
+- [`docs/development.md`](docs/development.md) — local quality and bootstrap commands
 
 ## Design principles
 
@@ -49,4 +51,4 @@ The proposed implementation uses:
 - `ryjen/prep-plugins` — original executable Bash plugins
 - `ryjen/prep-web` — historical web component
 
-These repositories remain useful as behavioral references and migration fixtures, but Prep 2 will be developed from the new contracts rather than by translating the C++ implementation class-for-class.
+These repositories remain useful as behavioral references and migration fixtures, but Prep 2 is being implemented from the new contracts rather than by translating the C++ implementation class-for-class.
