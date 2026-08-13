@@ -3,7 +3,8 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
-const HELP: &str = "Prep 2\n\nUsage:\n  prep --version\n  prep help\n  prep internal probe-plugin <executable>\n";
+const HELP: &str =
+    "Prep 2\n\nUsage:\n  prep --version\n  prep help\n  prep internal probe-plugin <executable>\n";
 
 #[derive(Debug)]
 pub enum CliError {
