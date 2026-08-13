@@ -4,11 +4,13 @@ ignore = []
 [licenses]
 allow = [
   "Apache-2.0",
-  "BSD-3-Clause",
   "MIT",
   "Unicode-3.0",
 ]
 confidence-threshold = 0.93
+
+[licenses.private]
+ignore = true
 
 [bans]
 multiple-versions = "warn"
