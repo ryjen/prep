@@ -75,23 +75,27 @@ fn timeout_cleans_up_an_ordinary_spawned_child_process() {
         other => panic!("expected result timeout, got {other:?}"),
     };
     let child_pid = parse_child_pid(&diagnostics.text).expect("fixture must report child pid");
+    assert_process_stops(child_pid);
+    assert!(started.elapsed() < TEST_DEADLINE);
+}
 
-    let cleanup_deadline = Instant::now() + Duration::from_secs(1);
-    while process_is_running(child_pid) && Instant::now() < cleanup_deadline {
-        thread::sleep(Duration::from_millis(25));
-    }
+#[cfg(unix)]
+#[test]
+fn successful_parent_exit_cleans_up_an_ordinary_spawned_child_process() {
+    let plugin = Path::new(env!("CARGO_BIN_EXE_prep-spawn-child-exit-plugin"));
+    let started = Instant::now();
+    let probe = probe_build_system_with_policy(plugin, test_policy())
+        .expect("fixture parent should return a valid successful result");
 
-    assert!(
-        !process_is_running(child_pid),
-        "managed plugin child {child_pid} remained running after timeout cleanup"
-    );
+    let child_pid = parse_child_pid(&probe.diagnostics.text).expect("fixture must report child pid");
+    assert_process_stops(child_pid);
     assert!(started.elapsed() < TEST_DEADLINE);
 }
 
 fn assert_timeout(plugin: &Path, expected_phase: PluginPhase) {
     let started = Instant::now();
-    let error = probe_build_system_with_policy(plugin, test_policy())
-        .expect_err("fixture should time out");
+    let error =
+        probe_build_system_with_policy(plugin, test_policy()).expect_err("fixture should time out");
 
     assert!(matches!(
         error,
@@ -109,9 +113,23 @@ fn parse_child_pid(diagnostics: &str) -> Option<u32> {
 }
 
 #[cfg(unix)]
+fn assert_process_stops(pid: u32) {
+    let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+    while process_is_running(pid) && Instant::now() < cleanup_deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    assert!(
+        !process_is_running(pid),
+        "managed plugin child {pid} remained running after process-group cleanup"
+    );
+}
+
+#[cfg(unix)]
 fn process_is_running(pid: u32) -> bool {
+    let pid = pid.to_string();
     let output = Command::new("/bin/ps")
-        .args(["-o", "state=", "-p", &pid.to_string()])
+        .args(["-o", "state=", "-p", pid.as_str()])
         .output()
         .expect("inspect fixture child process");
     if !output.status.success() {
