@@ -134,7 +134,10 @@ impl fmt::Display for PluginProbeError {
                 write!(formatter, "plugin {phase} exceeded timeout {timeout:?}")
             }
             Self::Cleanup { primary, message } => {
-                write!(formatter, "{primary}; plugin cleanup also failed: {message}")
+                write!(
+                    formatter,
+                    "{primary}; plugin cleanup also failed: {message}"
+                )
             }
         }
     }
@@ -543,11 +546,7 @@ fn configure_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_process_group(_command: &mut Command) {}
 
-fn terminate_and_reap(
-    child: &mut Child,
-    process_group_id: u32,
-    grace: Duration,
-) -> io::Result<()> {
+fn terminate_and_reap(child: &mut Child, process_group_id: u32, grace: Duration) -> io::Result<()> {
     #[cfg(unix)]
     {
         let term_sent = signal_process_group(process_group_id, "-TERM").unwrap_or(false);
@@ -561,7 +560,9 @@ fn terminate_and_reap(
             if !process_group_exists(process_group_id).unwrap_or(true) {
                 break;
             }
-            thread::sleep(WAIT_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+            thread::sleep(
+                WAIT_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
         }
 
         if process_group_exists(process_group_id).unwrap_or(true) {
