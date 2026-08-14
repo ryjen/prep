@@ -104,7 +104,10 @@ fn post_rename_lease_failure_rolls_back_published_result() {
 
     assert!(transaction.commit(&id).is_err());
     assert!(
-        store.get(&id).expect("read result after failed commit").is_none(),
+        store
+            .get(&id)
+            .expect("read result after failed commit")
+            .is_none(),
         "a commit that reports failure must not leave a valid published result"
     );
 }
