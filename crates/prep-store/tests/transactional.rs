@@ -23,6 +23,17 @@ impl TestDirectory {
         fs::create_dir_all(&path).expect("create test directory");
         Self(fs::canonicalize(path).expect("canonicalize test directory"))
     }
+
+    #[cfg(unix)]
+    fn new_short() -> Self {
+        let path = PathBuf::from(format!(
+            "/tmp/ps{}{:x}",
+            std::process::id(),
+            TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir_all(&path).expect("create short test directory");
+        Self(fs::canonicalize(path).expect("canonicalize short test directory"))
+    }
 }
 
 impl Drop for TestDirectory {
@@ -155,10 +166,10 @@ fn metadata_creation_failure_never_publishes_a_result() {
 fn special_file_output_is_rejected() {
     use std::os::unix::net::UnixListener;
 
-    let temp = TestDirectory::new_under(Path::new("/tmp"), "special");
-    let store = Store::open(&temp.0.join("store")).expect("open store");
+    let temp = TestDirectory::new_short();
+    let store = Store::open(&temp.0.join("s")).expect("open store");
     let transaction = store.begin().expect("begin transaction");
-    let socket_path = transaction.prefix().join("s");
+    let socket_path = transaction.prefix().join("x");
     let _listener = UnixListener::bind(&socket_path).expect("create unix socket fixture");
 
     assert!(transaction.commit(&result_id("3")).is_err());
