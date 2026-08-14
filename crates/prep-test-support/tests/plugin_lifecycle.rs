@@ -87,7 +87,8 @@ fn successful_parent_exit_cleans_up_an_ordinary_spawned_child_process() {
     let probe = probe_build_system_with_policy(plugin, test_policy())
         .expect("fixture parent should return a valid successful result");
 
-    let child_pid = parse_child_pid(&probe.diagnostics.text).expect("fixture must report child pid");
+    let child_pid =
+        parse_child_pid(&probe.diagnostics.text).expect("fixture must report child pid");
     assert_process_stops(child_pid);
     assert!(started.elapsed() < TEST_DEADLINE);
 }
