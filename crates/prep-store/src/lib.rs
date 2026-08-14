@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use std::os::unix::fs::MetadataExt;
 
 const RESULT_SCHEMA_V1: &str = "prep.result/1";
+const RESULT_RETENTION_PINNED: &str = "pinned";
 static TRANSACTION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
@@ -182,6 +183,7 @@ impl Store {
         fs::create_dir_all(root).map_err(|source| io_error("create store root", root, source))?;
         let root = fs::canonicalize(root)
             .map_err(|source| io_error("canonicalize store root", root, source))?;
+        require_real_directory(&root, "store root")?;
 
         let staging_root = ensure_child_directory(&root, ".staging")?;
         let lock_root = ensure_child_directory(&root, ".locks")?;
@@ -210,15 +212,14 @@ impl Store {
         for _ in 0..128 {
             let id = transaction_id();
             let lock_path = self.lock_root.join(format!("{id}.lock"));
-            let lease = match OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create_new(true)
-                .open(&lock_path)
-            {
+            let lease = match create_new_lock_file(&lock_path) {
                 Ok(file) => file,
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(source) => return Err(io_error("create staging lease", &lock_path, source)),
+                Err(StoreError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
             };
             lease
                 .lock()
@@ -228,13 +229,11 @@ impl Store {
             match fs::create_dir(&staging_path) {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let _ = lease.unlock();
-                    let _ = fs::remove_file(&lock_path);
+                    let _ = release_and_remove_lock_file(lease, &lock_path);
                     continue;
                 }
                 Err(source) => {
-                    let _ = lease.unlock();
-                    let _ = fs::remove_file(&lock_path);
+                    let _ = release_and_remove_lock_file(lease, &lock_path);
                     return Err(io_error("create staging directory", &staging_path, source));
                 }
             }
@@ -242,14 +241,12 @@ impl Store {
             let prefix = staging_path.join("prefix");
             if let Err(source) = fs::create_dir(&prefix) {
                 let _ = fs::remove_dir_all(&staging_path);
-                let _ = lease.unlock();
-                let _ = fs::remove_file(&lock_path);
+                let _ = release_and_remove_lock_file(lease, &lock_path);
                 return Err(io_error("create staging prefix", &prefix, source));
             }
 
             return Ok(StoreTransaction {
                 store: self.clone(),
-                id,
                 staging_path,
                 prefix,
                 lock_path,
@@ -264,11 +261,12 @@ impl Store {
     }
 
     pub fn get(&self, id: &StoreResultId) -> Result<Option<PublishedResult>, StoreError> {
+        self.verify_layout()?;
         let path = self.result_path(id);
-        if !path.exists() {
+        if !node_exists(&path)? {
             return Ok(None);
         }
-        validate_existing_result(&path, id)?;
+        validate_existing_result(&path, id, &self.results_sha256_root)?;
         Ok(Some(PublishedResult {
             id: id.clone(),
             prefix: path.join("prefix"),
@@ -285,47 +283,40 @@ impl Store {
         {
             let entry = entry
                 .map_err(|source| io_error("read staging entry", &self.staging_root, source))?;
+            let path = entry.path();
             let file_type = entry
                 .file_type()
-                .map_err(|source| io_error("read staging entry type", &entry.path(), source))?;
-            if !file_type.is_dir() {
+                .map_err(|source| io_error("read staging entry type", &path, source))?;
+            if !file_type.is_dir() || file_type.is_symlink() {
                 return Err(StoreError::InvalidOutput {
-                    path: entry.path(),
+                    path,
                     message: "staging root contains a non-directory entry".to_owned(),
                 });
             }
 
             let Some(id) = entry.file_name().to_str().map(ToOwned::to_owned) else {
                 return Err(StoreError::InvalidOutput {
-                    path: entry.path(),
+                    path,
                     message: "staging transaction name is not valid UTF-8".to_owned(),
                 });
             };
             if !valid_transaction_id(&id) {
                 return Err(StoreError::InvalidOutput {
-                    path: entry.path(),
+                    path,
                     message: "staging transaction has an invalid identifier".to_owned(),
                 });
             }
 
+            verify_real_directory_within(&self.staging_root, &path, "staging transaction")?;
             let lock_path = self.lock_root.join(format!("{id}.lock"));
-            let lease = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&lock_path)
-                .map_err(|source| io_error("open staging lease", &lock_path, source))?;
+            let lease = open_existing_lock_file(&lock_path)?;
 
             match lease.try_lock() {
                 Ok(()) => {
-                    fs::remove_dir_all(entry.path()).map_err(|source| {
-                        io_error("remove abandoned staging directory", &entry.path(), source)
+                    fs::remove_dir_all(&path).map_err(|source| {
+                        io_error("remove abandoned staging directory", &path, source)
                     })?;
-                    lease
-                        .unlock()
-                        .map_err(|source| io_error("unlock staging lease", &lock_path, source))?;
-                    fs::remove_file(&lock_path).map_err(|source| {
-                        io_error("remove abandoned staging lease", &lock_path, source)
-                    })?;
+                    release_and_remove_lock_file(lease, &lock_path)?;
                     recovered += 1;
                 }
                 Err(TryLockError::WouldBlock) => {}
@@ -350,24 +341,24 @@ impl Store {
                 continue;
             }
             let Some(stem) = path.file_stem().and_then(OsStr::to_str) else {
-                continue;
+                return Err(StoreError::InvalidPath(format!(
+                    "staging lease name is not valid UTF-8: {}",
+                    path.display()
+                )));
             };
-            if self.staging_root.join(stem).exists() {
+            if !valid_transaction_id(stem) {
+                return Err(StoreError::InvalidPath(format!(
+                    "staging lease has an invalid transaction identifier: {}",
+                    path.display()
+                )));
+            }
+            if node_exists(&self.staging_root.join(stem))? {
                 continue;
             }
-            let lease = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .open(&path)
-                .map_err(|source| io_error("open orphan staging lease", &path, source))?;
+
+            let lease = open_existing_lock_file(&path)?;
             match lease.try_lock() {
-                Ok(()) => {
-                    lease
-                        .unlock()
-                        .map_err(|source| io_error("unlock orphan staging lease", &path, source))?;
-                    fs::remove_file(&path)
-                        .map_err(|source| io_error("remove orphan staging lease", &path, source))?;
-                }
+                Ok(()) => release_and_remove_lock_file(lease, &path)?,
                 Err(TryLockError::WouldBlock) => {}
                 Err(TryLockError::Error(source)) => {
                     return Err(io_error("try orphan staging lease", &path, source));
@@ -377,7 +368,16 @@ impl Store {
         Ok(())
     }
 
+    fn verify_layout(&self) -> Result<(), StoreError> {
+        require_real_directory(&self.root, "store root")?;
+        verify_real_directory_within(&self.root, &self.staging_root, "staging root")?;
+        verify_real_directory_within(&self.root, &self.lock_root, "lock root")?;
+        verify_real_directory_within(&self.root, &self.results_sha256_root, "result root")?;
+        Ok(())
+    }
+
     fn lock_store(&self) -> Result<File, StoreError> {
+        self.verify_layout()?;
         let file = open_lock_file(&self.store_lock_path)?;
         file.lock()
             .map_err(|source| io_error("lock store", &self.store_lock_path, source))?;
@@ -391,7 +391,6 @@ impl Store {
 
 pub struct StoreTransaction {
     store: Store,
-    id: String,
     staging_path: PathBuf,
     prefix: PathBuf,
     lock_path: PathBuf,
@@ -412,14 +411,21 @@ impl StoreTransaction {
 
     pub fn commit(mut self, id: &StoreResultId) -> Result<PublishOutcome, StoreError> {
         let store_lock = self.store.lock_store()?;
+        verify_real_directory_within(
+            &self.store.staging_root,
+            &self.staging_path,
+            "staging transaction",
+        )?;
+        verify_real_directory_within(&self.staging_path, &self.prefix, "staging prefix")?;
         ensure_same_filesystem(&self.staging_path, &self.store.results_sha256_root)?;
         validate_output_tree(&self.prefix)?;
+        sync_output_tree(&self.prefix)?;
         write_result_metadata(&self.staging_path, id)?;
-        sync_tree_metadata(&self.staging_path)?;
+        sync_directory(&self.staging_path)?;
 
         let destination = self.store.result_path(id);
-        if destination.exists() {
-            validate_existing_result(&destination, id)?;
+        if node_exists(&destination)? {
+            validate_existing_result(&destination, id, &self.store.results_sha256_root)?;
             fs::remove_dir_all(&self.staging_path).map_err(|source| {
                 io_error(
                     "remove redundant staging result",
@@ -437,10 +443,9 @@ impl StoreTransaction {
             }));
         }
 
-        match fs::rename(&self.staging_path, &destination) {
-            Ok(()) => {}
-            Err(source) if destination.exists() => {
-                validate_existing_result(&destination, id)?;
+        if let Err(source) = fs::rename(&self.staging_path, &destination) {
+            if node_exists(&destination)? {
+                validate_existing_result(&destination, id, &self.store.results_sha256_root)?;
                 fs::remove_dir_all(&self.staging_path).map_err(|cleanup| {
                     io_error("remove raced staging result", &self.staging_path, cleanup)
                 })?;
@@ -453,10 +458,11 @@ impl StoreTransaction {
                     path: destination,
                 }));
             }
-            Err(source) => return Err(io_error("atomically publish result", &destination, source)),
+            return Err(io_error("atomically publish result", &destination, source));
         }
 
         sync_directory(&self.store.results_sha256_root)?;
+        validate_existing_result(&destination, id, &self.store.results_sha256_root)?;
         self.finish_lease()?;
         drop(store_lock);
         self.finished = true;
@@ -470,13 +476,7 @@ impl StoreTransaction {
 
     fn finish_lease(&mut self) -> Result<(), StoreError> {
         if let Some(lease) = self.lease.take() {
-            lease
-                .unlock()
-                .map_err(|source| io_error("unlock staging lease", &self.lock_path, source))?;
-        }
-        if self.lock_path.exists() {
-            fs::remove_file(&self.lock_path)
-                .map_err(|source| io_error("remove staging lease", &self.lock_path, source))?;
+            release_and_remove_lock_file(lease, &self.lock_path)?;
         }
         Ok(())
     }
@@ -501,9 +501,8 @@ impl Drop for StoreTransaction {
         if let Ok(_store_lock) = self.store.lock_store() {
             let _ = fs::remove_dir_all(&self.staging_path);
             if let Some(lease) = self.lease.take() {
-                let _ = lease.unlock();
+                let _ = release_and_remove_lock_file(lease, &self.lock_path);
             }
-            let _ = fs::remove_file(&self.lock_path);
         }
     }
 }
@@ -571,6 +570,7 @@ impl ActivationPlan {
                     result.id
                 )));
             }
+            validate_output_tree(&result.prefix)?;
         }
 
         let mut path_entries = Vec::new();
@@ -644,6 +644,7 @@ struct ResultMetadata {
     schema: String,
     result_id: String,
     state: String,
+    retention: String,
 }
 
 fn write_result_metadata(staging_path: &Path, id: &StoreResultId) -> Result<(), StoreError> {
@@ -651,6 +652,7 @@ fn write_result_metadata(staging_path: &Path, id: &StoreResultId) -> Result<(), 
         schema: RESULT_SCHEMA_V1.to_owned(),
         result_id: id.as_string(),
         state: "complete".to_owned(),
+        retention: RESULT_RETENTION_PINNED.to_owned(),
     };
     let encoded = toml::to_string(&metadata).map_err(|error| {
         StoreError::Serialization(format!("serialize result metadata: {error}"))
@@ -667,8 +669,23 @@ fn write_result_metadata(staging_path: &Path, id: &StoreResultId) -> Result<(), 
         .map_err(|source| io_error("sync result metadata", &path, source))
 }
 
-fn validate_existing_result(path: &Path, id: &StoreResultId) -> Result<(), StoreError> {
+fn validate_existing_result(
+    path: &Path,
+    id: &StoreResultId,
+    result_root: &Path,
+) -> Result<(), StoreError> {
+    validate_result_directory(result_root, path, "result directory")?;
+
     let metadata_path = path.join("result.toml");
+    let metadata_node = fs::symlink_metadata(&metadata_path)
+        .map_err(|source| io_error("inspect result metadata", &metadata_path, source))?;
+    if !metadata_node.file_type().is_file() || metadata_node.file_type().is_symlink() {
+        return Err(StoreError::CorruptResult {
+            path: path.to_path_buf(),
+            message: "result metadata must be a regular file".to_owned(),
+        });
+    }
+
     let encoded = fs::read_to_string(&metadata_path)
         .map_err(|source| io_error("read result metadata", &metadata_path, source))?;
     let metadata: ResultMetadata =
@@ -679,24 +696,58 @@ fn validate_existing_result(path: &Path, id: &StoreResultId) -> Result<(), Store
     if metadata.schema != RESULT_SCHEMA_V1
         || metadata.result_id != id.as_string()
         || metadata.state != "complete"
+        || metadata.retention != RESULT_RETENTION_PINNED
     {
         return Err(StoreError::CorruptResult {
             path: path.to_path_buf(),
-            message: "metadata does not identify a complete expected result".to_owned(),
+            message: "metadata does not identify a complete pinned expected result".to_owned(),
         });
     }
+
     let prefix = path.join("prefix");
-    if !prefix.is_dir() {
-        return Err(StoreError::CorruptResult {
-            path: path.to_path_buf(),
-            message: "result prefix is missing".to_owned(),
-        });
-    }
+    validate_result_directory(path, &prefix, "result prefix")?;
     validate_output_tree(&prefix)
 }
 
+fn validate_result_directory(parent: &Path, path: &Path, label: &str) -> Result<(), StoreError> {
+    let metadata = fs::symlink_metadata(path).map_err(|source| StoreError::CorruptResult {
+        path: path.to_path_buf(),
+        message: format!("cannot inspect {label}: {source}"),
+    })?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(StoreError::CorruptResult {
+            path: path.to_path_buf(),
+            message: format!("{label} must be a real directory"),
+        });
+    }
+    let canonical = fs::canonicalize(path).map_err(|source| StoreError::CorruptResult {
+        path: path.to_path_buf(),
+        message: format!("cannot canonicalize {label}: {source}"),
+    })?;
+    if canonical != path || canonical.strip_prefix(parent).is_err() {
+        return Err(StoreError::CorruptResult {
+            path: path.to_path_buf(),
+            message: format!("{label} escapes its expected parent"),
+        });
+    }
+    Ok(())
+}
+
 fn validate_output_tree(root: &Path) -> Result<(), StoreError> {
+    require_output_root(root)?;
     visit_output_tree(root, root)
+}
+
+fn require_output_root(root: &Path) -> Result<(), StoreError> {
+    let metadata = fs::symlink_metadata(root)
+        .map_err(|source| io_error("inspect output root", root, source))?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(StoreError::InvalidOutput {
+            path: root.to_path_buf(),
+            message: "output root must be a real directory".to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn visit_output_tree(root: &Path, directory: &Path) -> Result<(), StoreError> {
@@ -789,6 +840,32 @@ fn validate_symlink(root: &Path, path: &Path) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn sync_output_tree(root: &Path) -> Result<(), StoreError> {
+    for entry in
+        fs::read_dir(root).map_err(|source| io_error("read output directory for sync", root, source))?
+    {
+        let entry = entry.map_err(|source| io_error("read output entry for sync", root, source))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|source| io_error("read output entry type for sync", &path, source))?;
+        if file_type.is_dir() {
+            sync_output_tree(&path)?;
+        } else if file_type.is_file() {
+            let file = File::open(&path)
+                .map_err(|source| io_error("open output file for sync", &path, source))?;
+            file.sync_all()
+                .map_err(|source| io_error("sync output file", &path, source))?;
+        } else if !file_type.is_symlink() {
+            return Err(StoreError::InvalidOutput {
+                path,
+                message: "special files are not permitted in result prefixes".to_owned(),
+            });
+        }
+    }
+    sync_directory(root)
+}
+
 fn collect_leaf_paths(
     root: &Path,
     directory: &Path,
@@ -830,11 +907,6 @@ fn compose_path_value(
     })
 }
 
-fn sync_tree_metadata(staging_path: &Path) -> Result<(), StoreError> {
-    sync_directory(&staging_path.join("prefix"))?;
-    sync_directory(staging_path)
-}
-
 fn sync_directory(path: &Path) -> Result<(), StoreError> {
     let file =
         File::open(path).map_err(|source| io_error("open directory for sync", path, source))?;
@@ -854,31 +926,164 @@ fn ensure_child_directory(parent: &Path, name: &str) -> Result<PathBuf, StoreErr
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(&path)
-                .map_err(|source| io_error("create store directory", &path, source))?;
+            match fs::create_dir(&path) {
+                Ok(()) => {}
+                Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(source) => {
+                    return Err(io_error("create store directory", &path, source));
+                }
+            }
         }
         Err(source) => return Err(io_error("inspect store directory", &path, source)),
     }
 
-    let canonical = fs::canonicalize(&path)
-        .map_err(|source| io_error("canonicalize store directory", &path, source))?;
-    if canonical.strip_prefix(parent).is_err() {
+    verify_real_directory_within(parent, &path, "store child directory")?;
+    fs::canonicalize(&path).map_err(|source| io_error("canonicalize store directory", &path, source))
+}
+
+fn require_real_directory(path: &Path, label: &str) -> Result<(), StoreError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|source| io_error("inspect directory", path, source))?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
         return Err(StoreError::InvalidPath(format!(
-            "{} escapes its parent store root",
-            canonical.display()
+            "{label} must be a real directory: {}",
+            path.display()
         )));
     }
-    Ok(canonical)
+    Ok(())
+}
+
+fn verify_real_directory_within(parent: &Path, path: &Path, label: &str) -> Result<(), StoreError> {
+    require_real_directory(path, label)?;
+    let canonical = fs::canonicalize(path)
+        .map_err(|source| io_error("canonicalize directory", path, source))?;
+    if canonical != path || canonical.strip_prefix(parent).is_err() {
+        return Err(StoreError::InvalidPath(format!(
+            "{label} escapes its expected parent: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn create_new_lock_file(path: &Path) -> Result<File, StoreError> {
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|source| io_error("create lock file", path, source))?;
+    verify_open_file_identity(path, &file)?;
+    Ok(file)
 }
 
 fn open_lock_file(path: &Path) -> Result<File, StoreError> {
-    OpenOptions::new()
+    for _ in 0..4 {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                validate_lock_metadata(path, &metadata)?;
+                let file = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(path)
+                    .map_err(|source| io_error("open lock file", path, source))?;
+                verify_open_file_identity(path, &file)?;
+                return Ok(file);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match create_new_lock_file(path) {
+                    Ok(file) => return Ok(file),
+                    Err(StoreError::Io { source, .. })
+                        if source.kind() == std::io::ErrorKind::AlreadyExists =>
+                    {
+                        continue;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Err(source) => return Err(io_error("inspect lock file", path, source)),
+        }
+    }
+    Err(StoreError::InvalidPath(format!(
+        "lock file changed repeatedly while opening: {}",
+        path.display()
+    )))
+}
+
+fn open_existing_lock_file(path: &Path) -> Result<File, StoreError> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|source| io_error("inspect existing lock file", path, source))?;
+    validate_lock_metadata(path, &metadata)?;
+    let file = OpenOptions::new()
         .read(true)
         .write(true)
-        .create(true)
-        .truncate(false)
         .open(path)
-        .map_err(|source| io_error("open lock file", path, source))
+        .map_err(|source| io_error("open existing lock file", path, source))?;
+    verify_open_file_identity(path, &file)?;
+    Ok(file)
+}
+
+fn validate_lock_metadata(path: &Path, metadata: &fs::Metadata) -> Result<(), StoreError> {
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        return Err(StoreError::InvalidPath(format!(
+            "lock path must be a regular file: {}",
+            path.display()
+        )));
+    }
+    #[cfg(unix)]
+    if metadata.nlink() != 1 {
+        return Err(StoreError::InvalidPath(format!(
+            "lock file must not have hard links: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn verify_open_file_identity(path: &Path, file: &File) -> Result<(), StoreError> {
+    let path_metadata = fs::symlink_metadata(path)
+        .map_err(|source| io_error("reinspect open file path", path, source))?;
+    validate_lock_metadata(path, &path_metadata)?;
+    let file_metadata = file
+        .metadata()
+        .map_err(|source| io_error("inspect open file", path, source))?;
+
+    #[cfg(unix)]
+    if path_metadata.dev() != file_metadata.dev() || path_metadata.ino() != file_metadata.ino() {
+        return Err(StoreError::InvalidPath(format!(
+            "lock path changed while opening: {}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn release_and_remove_lock_file(file: File, path: &Path) -> Result<(), StoreError> {
+    verify_open_file_identity(path, &file)?;
+
+    #[cfg(unix)]
+    {
+        fs::remove_file(path).map_err(|source| io_error("remove lock file", path, source))?;
+        file.unlock()
+            .map_err(|source| io_error("unlock removed lock file", path, source))?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        file.unlock()
+            .map_err(|source| io_error("unlock lock file", path, source))?;
+        fs::remove_file(path).map_err(|source| io_error("remove lock file", path, source))?;
+    }
+
+    Ok(())
+}
+
+fn node_exists(path: &Path) -> Result<bool, StoreError> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(source) => Err(io_error("inspect filesystem node", path, source)),
+    }
 }
 
 fn require_absolute(label: &str, path: &Path) -> Result<(), StoreError> {
@@ -951,7 +1156,6 @@ mod tests {
 
     impl Drop for TestDirectory {
         fn drop(&mut self) {
-            let _ = make_tree_writable(&self.0);
             let _ = fs::remove_dir_all(&self.0);
         }
     }
@@ -974,20 +1178,29 @@ mod tests {
     }
 
     #[test]
-    fn successful_publish_is_isolated_and_idempotent() {
+    fn successful_publish_is_isolated_idempotent_and_pinned() {
         let temp = TestDirectory::new("publish");
         let store = Store::open(&temp.0.join("store")).expect("open store");
         let id = result_id("a");
 
         let transaction = store.begin().expect("begin transaction");
-        fs::create_dir(transaction.prefix().join("bin")).expect("create bin");
-        fs::write(transaction.prefix().join("bin/tool"), b"first").expect("write output");
+        fs::create_dir_all(transaction.prefix().join("lib/pkgconfig")).expect("create output");
+        fs::write(transaction.prefix().join("lib/pkgconfig/demo.pc"), b"first")
+            .expect("write output");
         let first = transaction.commit(&id).expect("publish result");
         assert!(matches!(first, PublishOutcome::Published(_)));
         assert_eq!(
-            fs::read(first.result().prefix().join("bin/tool")).expect("read result"),
+            fs::read(first.result().prefix().join("lib/pkgconfig/demo.pc"))
+                .expect("read result"),
             b"first"
         );
+
+        let metadata: ResultMetadata = toml::from_str(
+            &fs::read_to_string(first.result().path().join("result.toml"))
+                .expect("read result metadata"),
+        )
+        .expect("parse result metadata");
+        assert_eq!(metadata.retention, RESULT_RETENTION_PINNED);
 
         let second_transaction = store.begin().expect("begin second transaction");
         fs::write(second_transaction.prefix().join("other"), b"ignored")
@@ -996,10 +1209,6 @@ mod tests {
             .commit(&id)
             .expect("reuse existing result");
         assert!(matches!(second, PublishOutcome::Existing(_)));
-        assert_eq!(
-            fs::read(second.result().prefix().join("bin/tool")).expect("read existing result"),
-            b"first"
-        );
         assert!(!second.result().prefix().join("other").exists());
     }
 
@@ -1053,6 +1262,67 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn preexisting_result_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TestDirectory::new("result-symlink");
+        let store = Store::open(&temp.0.join("store")).expect("open store");
+        let id = result_id("f");
+        let outside = temp.0.join("outside-result");
+        fs::create_dir_all(outside.join("prefix")).expect("create outside result");
+        let destination = store.result_path(&id);
+        symlink(&outside, &destination).expect("create hostile result symlink");
+
+        assert!(matches!(
+            store.get(&id),
+            Err(StoreError::CorruptResult { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaced_result_prefix_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TestDirectory::new("prefix-symlink");
+        let store = Store::open(&temp.0.join("store")).expect("open store");
+        let id = result_id("1");
+        let transaction = store.begin().expect("begin transaction");
+        fs::write(transaction.prefix().join("tool"), b"tool").expect("write tool");
+        let published = transaction
+            .commit(&id)
+            .expect("publish result")
+            .result()
+            .clone();
+
+        fs::remove_dir_all(published.prefix()).expect("remove real prefix");
+        let outside = temp.0.join("outside-prefix");
+        fs::create_dir(&outside).expect("create outside prefix");
+        symlink(&outside, published.prefix()).expect("replace prefix with symlink");
+
+        assert!(matches!(
+            store.get(&id),
+            Err(StoreError::CorruptResult { .. })
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hostile_store_lock_symlink_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TestDirectory::new("store-lock-symlink");
+        let store_root = temp.0.join("store");
+        fs::create_dir(&store_root).expect("create store root");
+        let outside = temp.0.join("outside-lock");
+        fs::write(&outside, b"outside").expect("create outside lock target");
+        symlink(&outside, store_root.join(".store.lock")).expect("create hostile lock symlink");
+
+        assert!(matches!(Store::open(&store_root), Err(StoreError::InvalidPath(_))));
+    }
+
     #[test]
     fn activation_reports_collisions_without_overwriting_results() {
         let temp = TestDirectory::new("activation");
@@ -1077,25 +1347,12 @@ mod tests {
         assert_eq!(plan.collisions.len(), 1);
         assert_eq!(plan.collisions[0].relative_path, Path::new("bin/tool"));
         assert_eq!(
-            fs::read(published[0].prefix().join("bin/tool")).unwrap(),
+            fs::read(published[0].prefix().join("bin/tool")).expect("read first tool"),
             b"one"
         );
         assert_eq!(
-            fs::read(published[1].prefix().join("bin/tool")).unwrap(),
+            fs::read(published[1].prefix().join("bin/tool")).expect("read second tool"),
             b"two"
         );
-    }
-
-    fn make_tree_writable(path: &Path) -> std::io::Result<()> {
-        if !path.exists() {
-            return Ok(());
-        }
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                make_tree_writable(&entry.path())?;
-            }
-        }
-        Ok(())
     }
 }
