@@ -497,16 +497,16 @@ impl StoreTransaction {
             });
         }
 
-        if cleanup_lease {
-            if let Err(cleanup) = self.finish_lease() {
-                self.finished = true;
-                return Err(StoreError::CorruptResult {
-                    path: destination.to_path_buf(),
-                    message: format!(
-                        "publication failed: {failure}; result rollback succeeded; lease cleanup failed: {cleanup}"
-                    ),
-                });
-            }
+        if cleanup_lease
+            && let Err(cleanup) = self.finish_lease()
+        {
+            self.finished = true;
+            return Err(StoreError::CorruptResult {
+                path: destination.to_path_buf(),
+                message: format!(
+                    "publication failed: {failure}; result rollback succeeded; lease cleanup failed: {cleanup}"
+                ),
+            });
         }
 
         self.finished = true;
