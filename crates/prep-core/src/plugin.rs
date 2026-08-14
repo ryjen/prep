@@ -6,16 +6,75 @@ use std::error::Error;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 const HELLO_ID: &str = "hello";
 const PROBE_ID: &str = "probe-build-system";
+const DEFAULT_MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginDiagnostics {
+    pub text: String,
+    pub truncated: bool,
+}
+
+impl PluginDiagnostics {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PluginProcessPolicy {
+    pub operation_timeout: Duration,
+    pub termination_grace: Duration,
+    pub max_frame_bytes: usize,
+    pub max_diagnostic_bytes: usize,
+}
+
+impl Default for PluginProcessPolicy {
+    fn default() -> Self {
+        Self {
+            operation_timeout: Duration::from_secs(30),
+            termination_grace: Duration::from_millis(500),
+            max_frame_bytes: DEFAULT_MAX_FRAME_BYTES,
+            max_diagnostic_bytes: DEFAULT_MAX_DIAGNOSTIC_BYTES,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PluginPhase {
+    Handshake,
+    Result,
+    Exit,
+}
+
+impl fmt::Display for PluginPhase {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Handshake => formatter.write_str("handshake"),
+            Self::Result => formatter.write_str("result"),
+            Self::Exit => formatter.write_str("process exit"),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginProbe {
     pub name: String,
     pub version: String,
     pub supported: bool,
+    pub diagnostics: PluginDiagnostics,
 }
 
 #[derive(Debug)]
@@ -34,7 +93,19 @@ pub enum PluginProbeError {
         code: String,
         message: String,
     },
-    ProcessFailed(Option<i32>),
+    ProcessFailed {
+        code: Option<i32>,
+        diagnostics: PluginDiagnostics,
+    },
+    Timeout {
+        phase: PluginPhase,
+        timeout: Duration,
+        diagnostics: PluginDiagnostics,
+    },
+    Cleanup {
+        primary: Box<PluginProbeError>,
+        message: String,
+    },
 }
 
 impl fmt::Display for PluginProbeError {
@@ -56,8 +127,17 @@ impl fmt::Display for PluginProbeError {
             Self::PluginReturnedError { code, message } => {
                 write!(formatter, "plugin returned {code}: {message}")
             }
-            Self::ProcessFailed(code) => {
+            Self::ProcessFailed { code, .. } => {
                 write!(formatter, "plugin process failed with status {code:?}")
+            }
+            Self::Timeout { phase, timeout, .. } => {
+                write!(formatter, "plugin {phase} exceeded timeout {timeout:?}")
+            }
+            Self::Cleanup { primary, message } => {
+                write!(
+                    formatter,
+                    "{primary}; plugin cleanup also failed: {message}"
+                )
             }
         }
     }
@@ -67,64 +147,100 @@ impl Error for PluginProbeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Spawn(error) | Self::Io { source: error, .. } => Some(error),
+            Self::Cleanup { primary, .. } => Some(primary.as_ref()),
             _ => None,
         }
     }
 }
 
 pub fn probe_build_system(executable: &Path) -> Result<PluginProbe, PluginProbeError> {
-    let mut child = Command::new(executable)
+    probe_build_system_with_policy(executable, PluginProcessPolicy::default())
+}
+
+pub fn probe_build_system_with_policy(
+    executable: &Path,
+    policy: PluginProcessPolicy,
+) -> Result<PluginProbe, PluginProbeError> {
+    let mut command = Command::new(executable);
+    command
         .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(PluginProbeError::Spawn)?;
+        .stderr(Stdio::piped());
+    configure_process_group(&mut command);
 
+    let mut child = command.spawn().map_err(PluginProbeError::Spawn)?;
+    let process_group_id = child.id();
     let mut stdin = child.stdin.take().ok_or_else(|| {
         PluginProbeError::Protocol("plugin stdin pipe was not created".to_owned())
     })?;
     let stdout = child.stdout.take().ok_or_else(|| {
         PluginProbeError::Protocol("plugin stdout pipe was not created".to_owned())
     })?;
-    let mut stdout = BufReader::new(stdout);
+    let stderr = child.stderr.take().ok_or_else(|| {
+        PluginProbeError::Protocol("plugin stderr pipe was not created".to_owned())
+    })?;
+
+    let stdout = spawn_stdout_reader(stdout, policy.max_frame_bytes);
+    let diagnostics = DiagnosticCapture::new(stderr, policy.max_diagnostic_bytes);
+    let deadline = Instant::now() + policy.operation_timeout;
 
     let interaction = (|| {
         write_protocol_frame(
             &mut stdin,
             &HelloFrame::new(HELLO_ID, env!("CARGO_PKG_VERSION")),
         )?;
-        let hello_line = read_bounded_line(&mut stdout)?;
-        let hello: HelloResultFrame = decode_frame(&hello_line, DEFAULT_MAX_FRAME_BYTES)
+        let hello_line = receive_protocol_line(&stdout, deadline, PluginPhase::Handshake)?;
+        let hello: HelloResultFrame = decode_frame(&hello_line, policy.max_frame_bytes)
             .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
         validate_handshake(&hello)?;
 
         write_protocol_frame(&mut stdin, &ProbeBuildSystemRequest::new(PROBE_ID))?;
-        let result_line = read_bounded_line(&mut stdout)?;
-        let result: ResultFrame = decode_frame(&result_line, DEFAULT_MAX_FRAME_BYTES)
+        let result_line = receive_protocol_line(&stdout, deadline, PluginPhase::Result)?;
+        let result: ResultFrame = decode_frame(&result_line, policy.max_frame_bytes)
             .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
         validate_result(&result)?;
 
-        Ok::<_, PluginProbeError>((hello.plugin, result))
+        Ok::<_, LifecycleFailure>((hello.plugin, result))
     })();
 
     drop(stdin);
 
     let (plugin, result) = match interaction {
         Ok(value) => value,
-        Err(error) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(error);
+        Err(failure) => {
+            return Err(cleanup_failure(
+                &mut child,
+                process_group_id,
+                failure,
+                &diagnostics,
+                policy,
+            ));
         }
     };
 
-    let status = child.wait().map_err(|source| PluginProbeError::Io {
-        operation: "wait",
-        source,
-    })?;
+    let status = match wait_for_exit(&mut child, deadline) {
+        Ok(status) => status,
+        Err(failure) => {
+            return Err(cleanup_failure(
+                &mut child,
+                process_group_id,
+                failure,
+                &diagnostics,
+                policy,
+            ));
+        }
+    };
+
+    cleanup_remaining_process_group(process_group_id, policy.termination_grace);
+    diagnostics.finish(policy.termination_grace);
+    let diagnostics = diagnostics.snapshot();
+
     if !status.success() {
-        return Err(PluginProbeError::ProcessFailed(status.code()));
+        return Err(PluginProbeError::ProcessFailed {
+            code: status.code(),
+            diagnostics,
+        });
     }
 
     if result.status == "error" {
@@ -152,7 +268,171 @@ pub fn probe_build_system(executable: &Path) -> Result<PluginProbe, PluginProbeE
         name: plugin.name,
         version: plugin.version,
         supported,
+        diagnostics,
     })
+}
+
+#[derive(Debug)]
+enum LifecycleFailure {
+    Probe(PluginProbeError),
+    Timeout(PluginPhase),
+}
+
+impl From<PluginProbeError> for LifecycleFailure {
+    fn from(error: PluginProbeError) -> Self {
+        Self::Probe(error)
+    }
+}
+
+fn cleanup_failure(
+    child: &mut Child,
+    process_group_id: u32,
+    failure: LifecycleFailure,
+    diagnostics: &DiagnosticCapture,
+    policy: PluginProcessPolicy,
+) -> PluginProbeError {
+    let cleanup = terminate_and_reap(child, process_group_id, policy.termination_grace);
+    diagnostics.finish(policy.termination_grace);
+    let captured = diagnostics.snapshot();
+
+    let primary = match failure {
+        LifecycleFailure::Probe(error) => error,
+        LifecycleFailure::Timeout(phase) => PluginProbeError::Timeout {
+            phase,
+            timeout: policy.operation_timeout,
+            diagnostics: captured,
+        },
+    };
+
+    match cleanup {
+        Ok(()) => primary,
+        Err(error) => PluginProbeError::Cleanup {
+            primary: Box::new(primary),
+            message: error.to_string(),
+        },
+    }
+}
+
+fn receive_protocol_line(
+    receiver: &Receiver<Result<String, PluginProbeError>>,
+    deadline: Instant,
+    phase: PluginPhase,
+) -> Result<String, LifecycleFailure> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(LifecycleFailure::Timeout(phase));
+    }
+
+    match receiver.recv_timeout(remaining) {
+        Ok(result) => result.map_err(LifecycleFailure::Probe),
+        Err(RecvTimeoutError::Timeout) => Err(LifecycleFailure::Timeout(phase)),
+        Err(RecvTimeoutError::Disconnected) => {
+            Err(LifecycleFailure::Probe(PluginProbeError::UnexpectedEof))
+        }
+    }
+}
+
+fn wait_for_exit(child: &mut Child, deadline: Instant) -> Result<ExitStatus, LifecycleFailure> {
+    loop {
+        match child.try_wait().map_err(|source| {
+            LifecycleFailure::Probe(PluginProbeError::Io {
+                operation: "wait",
+                source,
+            })
+        })? {
+            Some(status) => return Ok(status),
+            None => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Err(LifecycleFailure::Timeout(PluginPhase::Exit));
+                }
+                thread::sleep(WAIT_POLL_INTERVAL.min(remaining));
+            }
+        }
+    }
+}
+
+fn spawn_stdout_reader(
+    stdout: ChildStdout,
+    max_frame_bytes: usize,
+) -> Receiver<Result<String, PluginProbeError>> {
+    let (sender, receiver) = mpsc::sync_channel(2);
+    thread::spawn(move || {
+        let mut stdout = BufReader::new(stdout);
+        loop {
+            let result = read_bounded_line(&mut stdout, max_frame_bytes);
+            let terminal = result.is_err();
+            if sender.send(result).is_err() || terminal {
+                break;
+            }
+        }
+    });
+    receiver
+}
+
+#[derive(Debug, Default)]
+struct DiagnosticBuffer {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+impl DiagnosticBuffer {
+    fn append(&mut self, bytes: &[u8], limit: usize) {
+        let remaining = limit.saturating_sub(self.bytes.len());
+        let accepted = remaining.min(bytes.len());
+        self.bytes.extend_from_slice(&bytes[..accepted]);
+        if accepted < bytes.len() {
+            self.truncated = true;
+        }
+    }
+
+    fn snapshot(&self) -> PluginDiagnostics {
+        PluginDiagnostics {
+            text: String::from_utf8_lossy(&self.bytes).into_owned(),
+            truncated: self.truncated,
+        }
+    }
+}
+
+struct DiagnosticCapture {
+    shared: Arc<Mutex<DiagnosticBuffer>>,
+    done: Receiver<()>,
+}
+
+impl DiagnosticCapture {
+    fn new(mut stderr: ChildStderr, limit: usize) -> Self {
+        let shared = Arc::new(Mutex::new(DiagnosticBuffer::default()));
+        let worker_shared = Arc::clone(&shared);
+        let (done_sender, done) = mpsc::sync_channel(1);
+
+        thread::spawn(move || {
+            let mut chunk = [0_u8; 4096];
+            loop {
+                match stderr.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(count) => worker_shared
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .append(&chunk[..count], limit),
+                    Err(_) => break,
+                }
+            }
+            let _ = done_sender.send(());
+        });
+
+        Self { shared, done }
+    }
+
+    fn finish(&self, wait: Duration) {
+        let _ = self.done.recv_timeout(wait);
+    }
+
+    fn snapshot(&self) -> PluginDiagnostics {
+        self.shared
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .snapshot()
+    }
 }
 
 fn validate_handshake(hello: &HelloResultFrame) -> Result<(), PluginProbeError> {
@@ -229,10 +509,13 @@ fn write_protocol_frame<T: serde::Serialize>(
         })
 }
 
-fn read_bounded_line(reader: &mut impl BufRead) -> Result<String, PluginProbeError> {
+fn read_bounded_line(
+    reader: &mut impl BufRead,
+    max_frame_bytes: usize,
+) -> Result<String, PluginProbeError> {
     let mut line = String::new();
     let bytes_read = {
-        let mut limited = reader.take((DEFAULT_MAX_FRAME_BYTES + 1) as u64);
+        let mut limited = reader.take((max_frame_bytes.saturating_add(1)) as u64);
         limited
             .read_line(&mut line)
             .map_err(|source| PluginProbeError::Io {
@@ -244,15 +527,100 @@ fn read_bounded_line(reader: &mut impl BufRead) -> Result<String, PluginProbeErr
     if bytes_read == 0 {
         return Err(PluginProbeError::UnexpectedEof);
     }
-    if bytes_read > DEFAULT_MAX_FRAME_BYTES {
+    if bytes_read > max_frame_bytes {
         return Err(PluginProbeError::Protocol(format!(
-            "protocol frame exceeds {DEFAULT_MAX_FRAME_BYTES} bytes"
+            "protocol frame exceeds {max_frame_bytes} bytes"
         )));
     }
     if !line.ends_with('\n') {
         return Err(PluginProbeError::MissingNewline);
     }
     Ok(line)
+}
+
+#[cfg(unix)]
+fn configure_process_group(command: &mut Command) {
+    command.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn configure_process_group(_command: &mut Command) {}
+
+fn terminate_and_reap(child: &mut Child, process_group_id: u32, grace: Duration) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let term_sent = signal_process_group(process_group_id, "-TERM").unwrap_or(false);
+        if !term_sent && child.try_wait()?.is_none() {
+            child.kill()?;
+        }
+
+        let deadline = Instant::now() + grace;
+        while Instant::now() < deadline {
+            let _ = child.try_wait()?;
+            if !process_group_exists(process_group_id).unwrap_or(true) {
+                break;
+            }
+            thread::sleep(
+                WAIT_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+
+        if process_group_exists(process_group_id).unwrap_or(true) {
+            let _ = signal_process_group(process_group_id, "-KILL");
+        }
+        if child.try_wait()?.is_none() {
+            child.kill()?;
+        }
+        let _ = child.wait()?;
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    {
+        if child.try_wait()?.is_none() {
+            child.kill()?;
+        }
+        let _ = child.wait()?;
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn cleanup_remaining_process_group(process_group_id: u32, grace: Duration) {
+    if !process_group_exists(process_group_id).unwrap_or(false) {
+        return;
+    }
+
+    let _ = signal_process_group(process_group_id, "-TERM");
+    let deadline = Instant::now() + grace;
+    while Instant::now() < deadline {
+        if !process_group_exists(process_group_id).unwrap_or(true) {
+            return;
+        }
+        thread::sleep(WAIT_POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now())));
+    }
+    let _ = signal_process_group(process_group_id, "-KILL");
+}
+
+#[cfg(not(unix))]
+fn cleanup_remaining_process_group(_process_group_id: u32, _grace: Duration) {}
+
+#[cfg(unix)]
+fn signal_process_group(process_group_id: u32, signal: &str) -> io::Result<bool> {
+    let status = Command::new("/bin/kill")
+        .arg(signal)
+        .arg("--")
+        .arg(format!("-{process_group_id}"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    Ok(status.success())
+}
+
+#[cfg(unix)]
+fn process_group_exists(process_group_id: u32) -> io::Result<bool> {
+    signal_process_group(process_group_id, "-0")
 }
 
 #[cfg(test)]
@@ -285,5 +653,14 @@ mod tests {
             validate_result(&result),
             Err(PluginProbeError::InvalidResult(_))
         ));
+    }
+
+    #[test]
+    fn diagnostic_buffer_is_bounded() {
+        let mut buffer = DiagnosticBuffer::default();
+        buffer.append(b"abcdef", 4);
+        let snapshot = buffer.snapshot();
+        assert_eq!(snapshot.text, "abcd");
+        assert!(snapshot.truncated);
     }
 }
