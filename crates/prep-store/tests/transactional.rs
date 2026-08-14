@@ -89,8 +89,7 @@ fn published_result_reopens_as_complete() {
         let store = Store::open(&store_root).expect("open store");
         let transaction = store.begin().expect("begin transaction");
         fs::create_dir_all(transaction.prefix().join("bin")).expect("create output directory");
-        fs::write(transaction.prefix().join("bin/tool"), b"durable")
-            .expect("write staged output");
+        fs::write(transaction.prefix().join("bin/tool"), b"durable").expect("write staged output");
         transaction.commit(&id).expect("publish result");
     }
 
