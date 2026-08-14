@@ -52,7 +52,7 @@ impl Default for PluginProcessPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy,PartialEq, Eq)]
 pub enum PluginPhase {
     Handshake,
     Result,
@@ -609,6 +609,7 @@ fn cleanup_remaining_process_group(_process_group_id: u32, _grace: Duration) {}
 fn signal_process_group(process_group_id: u32, signal: &str) -> io::Result<bool> {
     let status = Command::new("/bin/kill")
         .arg(signal)
+        .arg("--")
         .arg(format!("-{process_group_id}"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
