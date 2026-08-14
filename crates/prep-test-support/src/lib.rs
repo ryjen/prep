@@ -7,7 +7,7 @@ use prep_protocol::{
 use serde_json::json;
 use std::error::Error;
 use std::io::{self, BufRead, Write};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -20,6 +20,7 @@ pub enum AdversarialPluginMode {
     HangExit,
     FloodStderr,
     SpawnChild,
+    SpawnChildExit,
 }
 
 pub fn run_adversarial_plugin(mode: AdversarialPluginMode) -> Result<(), Box<dyn Error>> {
@@ -66,16 +67,15 @@ pub fn run_adversarial_plugin(mode: AdversarialPluginMode) -> Result<(), Box<dyn
             Ok(())
         }
         AdversarialPluginMode::SpawnChild => {
-            let child = Command::new("/bin/sleep")
-                .arg("60")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()?;
-            eprintln!("child_pid={}", child.id());
-            io::stderr().flush()?;
+            let child = spawn_sleep_child()?;
+            report_child_pid(&child)?;
             thread::sleep(FIXTURE_HANG);
             Ok(())
+        }
+        AdversarialPluginMode::SpawnChildExit => {
+            let child = spawn_sleep_child()?;
+            report_child_pid(&child)?;
+            write_success_result(&mut stdout, probe)
         }
         AdversarialPluginMode::FloodStderr => {
             let chunk = vec![b'x'; 4096];
@@ -93,6 +93,20 @@ pub fn run_adversarial_plugin(mode: AdversarialPluginMode) -> Result<(), Box<dyn
             Ok(())
         }
     }
+}
+
+fn spawn_sleep_child() -> Result<Child, io::Error> {
+    Command::new("/bin/sleep")
+        .arg("60")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+}
+
+fn report_child_pid(child: &Child) -> Result<(), io::Error> {
+    eprintln!("child_pid={}", child.id());
+    io::stderr().flush()
 }
 
 fn write_success_result(
@@ -119,6 +133,7 @@ fn fixture_name(mode: AdversarialPluginMode) -> &'static str {
         AdversarialPluginMode::HangExit => "hang-exit",
         AdversarialPluginMode::FloodStderr => "flood-stderr",
         AdversarialPluginMode::SpawnChild => "spawn-child",
+        AdversarialPluginMode::SpawnChildExit => "spawn-child-exit",
     }
 }
 
