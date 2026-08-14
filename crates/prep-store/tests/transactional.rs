@@ -11,7 +11,11 @@ struct TestDirectory(PathBuf);
 
 impl TestDirectory {
     fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
+        Self::new_under(&std::env::temp_dir(), label)
+    }
+
+    fn new_under(root: &Path, label: &str) -> Self {
+        let path = root.join(format!(
             "prep-store-integration-{label}-{}-{:x}",
             std::process::id(),
             TEST_COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -151,10 +155,10 @@ fn metadata_creation_failure_never_publishes_a_result() {
 fn special_file_output_is_rejected() {
     use std::os::unix::net::UnixListener;
 
-    let temp = TestDirectory::new("special-file");
+    let temp = TestDirectory::new_under(Path::new("/tmp"), "special");
     let store = Store::open(&temp.0.join("store")).expect("open store");
     let transaction = store.begin().expect("begin transaction");
-    let socket_path = transaction.prefix().join("socket");
+    let socket_path = transaction.prefix().join("s");
     let _listener = UnixListener::bind(&socket_path).expect("create unix socket fixture");
 
     assert!(transaction.commit(&result_id("3")).is_err());
