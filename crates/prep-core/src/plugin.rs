@@ -572,7 +572,7 @@ fn terminate_and_reap(child: &mut Child, process_group_id: u32, grace: Duration)
             child.kill()?;
         }
         let _ = child.wait()?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(unix))]
