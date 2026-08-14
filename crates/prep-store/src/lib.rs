@@ -841,8 +841,8 @@ fn validate_symlink(root: &Path, path: &Path) -> Result<(), StoreError> {
 }
 
 fn sync_output_tree(root: &Path) -> Result<(), StoreError> {
-    for entry in
-        fs::read_dir(root).map_err(|source| io_error("read output directory for sync", root, source))?
+    for entry in fs::read_dir(root)
+        .map_err(|source| io_error("read output directory for sync", root, source))?
     {
         let entry = entry.map_err(|source| io_error("read output entry for sync", root, source))?;
         let path = entry.path();
@@ -925,25 +925,24 @@ fn ensure_child_directory(parent: &Path, name: &str) -> Result<PathBuf, StoreErr
                 )));
             }
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            match fs::create_dir(&path) {
-                Ok(()) => {}
-                Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
-                Err(source) => {
-                    return Err(io_error("create store directory", &path, source));
-                }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match fs::create_dir(&path) {
+            Ok(()) => {}
+            Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(source) => {
+                return Err(io_error("create store directory", &path, source));
             }
-        }
+        },
         Err(source) => return Err(io_error("inspect store directory", &path, source)),
     }
 
     verify_real_directory_within(parent, &path, "store child directory")?;
-    fs::canonicalize(&path).map_err(|source| io_error("canonicalize store directory", &path, source))
+    fs::canonicalize(&path)
+        .map_err(|source| io_error("canonicalize store directory", &path, source))
 }
 
 fn require_real_directory(path: &Path, label: &str) -> Result<(), StoreError> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|source| io_error("inspect directory", path, source))?;
+    let metadata =
+        fs::symlink_metadata(path).map_err(|source| io_error("inspect directory", path, source))?;
     if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
         return Err(StoreError::InvalidPath(format!(
             "{label} must be a real directory: {}",
@@ -1190,8 +1189,7 @@ mod tests {
         let first = transaction.commit(&id).expect("publish result");
         assert!(matches!(first, PublishOutcome::Published(_)));
         assert_eq!(
-            fs::read(first.result().prefix().join("lib/pkgconfig/demo.pc"))
-                .expect("read result"),
+            fs::read(first.result().prefix().join("lib/pkgconfig/demo.pc")).expect("read result"),
             b"first"
         );
 
@@ -1320,7 +1318,10 @@ mod tests {
         fs::write(&outside, b"outside").expect("create outside lock target");
         symlink(&outside, store_root.join(".store.lock")).expect("create hostile lock symlink");
 
-        assert!(matches!(Store::open(&store_root), Err(StoreError::InvalidPath(_))));
+        assert!(matches!(
+            Store::open(&store_root),
+            Err(StoreError::InvalidPath(_))
+        ));
     }
 
     #[test]
