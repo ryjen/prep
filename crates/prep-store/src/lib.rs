@@ -461,9 +461,18 @@ impl StoreTransaction {
             return Err(io_error("atomically publish result", &destination, source));
         }
 
-        sync_directory(&self.store.results_sha256_root)?;
-        validate_existing_result(&destination, id, &self.store.results_sha256_root)?;
-        self.finish_lease()?;
+        if let Err(failure) =
+            validate_existing_result(&destination, id, &self.store.results_sha256_root)
+        {
+            return self.fail_after_publish(&destination, failure, true);
+        }
+        if let Err(failure) = self.finish_lease() {
+            return self.fail_after_publish(&destination, failure, false);
+        }
+        if let Err(failure) = sync_directory(&self.store.results_sha256_root) {
+            return self.fail_after_publish(&destination, failure, false);
+        }
+
         drop(store_lock);
         self.finished = true;
 
@@ -472,6 +481,47 @@ impl StoreTransaction {
             prefix: destination.join("prefix"),
             path: destination,
         }))
+    }
+
+    fn fail_after_publish(
+        &mut self,
+        destination: &Path,
+        failure: StoreError,
+        cleanup_lease: bool,
+    ) -> Result<PublishOutcome, StoreError> {
+        if let Err(rollback) = self.rollback_published_result(destination) {
+            self.finished = true;
+            return Err(StoreError::CorruptResult {
+                path: destination.to_path_buf(),
+                message: format!("publication failed: {failure}; rollback failed: {rollback}"),
+            });
+        }
+
+        if cleanup_lease {
+            if let Err(cleanup) = self.finish_lease() {
+                self.finished = true;
+                return Err(StoreError::CorruptResult {
+                    path: destination.to_path_buf(),
+                    message: format!(
+                        "publication failed: {failure}; result rollback succeeded; lease cleanup failed: {cleanup}"
+                    ),
+                });
+            }
+        }
+
+        self.finished = true;
+        Err(failure)
+    }
+
+    fn rollback_published_result(&self, destination: &Path) -> Result<(), StoreError> {
+        validate_result_directory(
+            &self.store.results_sha256_root,
+            destination,
+            "published result rollback target",
+        )?;
+        fs::remove_dir_all(destination)
+            .map_err(|source| io_error("roll back published result", destination, source))?;
+        sync_directory(&self.store.results_sha256_root)
     }
 
     fn finish_lease(&mut self) -> Result<(), StoreError> {
