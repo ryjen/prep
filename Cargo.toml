@@ -4,6 +4,7 @@ members = [
   "crates/prep-core",
   "crates/prep-manifest",
   "crates/prep-protocol",
+  "crates/prep-store",
   "crates/prep-test-support",
 ]
 exclude = ["fuzz"]
