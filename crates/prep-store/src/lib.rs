@@ -261,7 +261,7 @@ impl Store {
     }
 
     pub fn get(&self, id: &StoreResultId) -> Result<Option<PublishedResult>, StoreError> {
-        self.verify_layout()?;
+        let _store_lock = self.lock_store()?;
         let path = self.result_path(id);
         if !node_exists(&path)? {
             return Ok(None);
@@ -497,9 +497,7 @@ impl StoreTransaction {
             });
         }
 
-        if cleanup_lease
-            && let Err(cleanup) = self.finish_lease()
-        {
+        if cleanup_lease && let Err(cleanup) = self.finish_lease() {
             self.finished = true;
             return Err(StoreError::CorruptResult {
                 path: destination.to_path_buf(),
