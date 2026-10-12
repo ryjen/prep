@@ -1,6 +1,6 @@
 use prep_protocol::{
     DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginCapability,
-    ProbeBuildSystemRequest, ResultFrame, decode_frame, encode_frame,
+    PluginOperation, ProbeBuildSystemRequest, ResultFrame, decode_frame, encode_frame,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -514,7 +514,7 @@ fn validate_handshake(hello: &HelloResultFrame) -> Result<(), PluginProbeError> 
         .plugin
         .operations
         .iter()
-        .any(|operation| operation == "probe_build_system")
+        .any(|operation| *operation == PluginOperation::ProbeBuildSystem)
     {
         return Err(PluginProbeError::InvalidHandshake(
             "plugin did not declare probe_build_system".to_owned(),
