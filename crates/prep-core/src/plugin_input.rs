@@ -285,6 +285,7 @@ pub fn authorize_builder_operation(
 pub fn required_builder_capabilities(
     operation: BuilderOperation,
 ) -> &'static [PluginCapability] {
+    const SPAWN: &[PluginCapability] = &[PluginCapability::ProcessSpawn];
     const READ_AND_SPAWN: &[PluginCapability] = &[
         PluginCapability::ProcessSpawn,
         PluginCapability::FilesystemReadSource,
@@ -295,9 +296,8 @@ pub fn required_builder_capabilities(
     ];
 
     match operation {
-        BuilderOperation::Configure | BuilderOperation::Build | BuilderOperation::Test => {
-            READ_AND_SPAWN
-        }
+        BuilderOperation::Configure | BuilderOperation::Build => READ_AND_SPAWN,
+        BuilderOperation::Test => SPAWN,
         BuilderOperation::InstallToStaging => INSTALL,
     }
 }
