@@ -28,6 +28,9 @@ pub enum PluginInputError {
     },
     InvalidEnvironmentKey(String),
     InvalidEnvironmentValue(String),
+    InvalidArgument {
+        index: usize,
+    },
     MissingDeclaredCapability {
         operation: BuilderOperation,
         capability: PluginCapability,
@@ -59,6 +62,9 @@ impl fmt::Display for PluginInputError {
             }
             Self::InvalidEnvironmentValue(key) => {
                 write!(formatter, "plugin environment value for {key:?} contains NUL")
+            }
+            Self::InvalidArgument { index } => {
+                write!(formatter, "plugin argument {index} contains NUL")
             }
             Self::MissingDeclaredCapability {
                 operation,
@@ -193,6 +199,12 @@ pub struct BuilderRequestInput {
 
 impl BuilderRequestInput {
     pub fn into_frame(self) -> Result<BuilderRequestFrame, PluginInputError> {
+        for (index, argument) in self.arguments.iter().enumerate() {
+            if argument.contains('\0') {
+                return Err(PluginInputError::InvalidArgument { index });
+            }
+        }
+
         let dependency_prefixes = self
             .dependency_prefixes
             .iter()
@@ -310,7 +322,7 @@ fn path_to_protocol_string(
 }
 
 fn validate_environment_key(key: &str) -> Result<(), PluginInputError> {
-    if key.is_empty() || key.chars().any(|character| matches!(character, '=' | '\0')) {
+    if key.is_empty() || key.contains('=') || key.contains('\0') {
         return Err(PluginInputError::InvalidEnvironmentKey(key.to_owned()));
     }
     Ok(())
@@ -437,6 +449,33 @@ mod tests {
             Some("/tools/bin")
         );
         assert!(frame.context.offline);
+    }
+
+    #[test]
+    fn builder_request_rejects_nul_argument() {
+        let temp = TestDirectory::new("nul-argument");
+        let roots = PluginExecutionRoots::new(
+            &temp.child("source"),
+            &temp.child("build"),
+            &temp.child("staging"),
+        )
+        .expect("validate execution roots");
+
+        let error = BuilderRequestInput {
+            id: "42".to_owned(),
+            operation: BuilderOperation::Build,
+            package_name: PackageName::parse("hello").expect("package name"),
+            package_version: PackageVersion::parse("1.0.0").expect("package version"),
+            roots,
+            dependency_prefixes: Vec::new(),
+            environment: SanitizedPluginEnvironment::default(),
+            offline: false,
+            arguments: vec!["bad\0argument".to_owned()],
+        }
+        .into_frame()
+        .expect_err("NUL argument must fail");
+
+        assert!(matches!(error, PluginInputError::InvalidArgument { index: 0 }));
     }
 
     #[test]
