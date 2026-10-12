@@ -2,7 +2,8 @@
 
 use prep_protocol::{
     DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginCapability,
-    PluginDescriptor, ProbeBuildSystemRequest, ResultFrame, decode_frame, encode_frame,
+    PluginDescriptor, PluginOperation, ProbeBuildSystemRequest, ResultFrame, decode_frame,
+    encode_frame,
 };
 use serde_json::json;
 use std::error::Error;
@@ -48,7 +49,7 @@ pub fn run_adversarial_plugin(mode: AdversarialPluginMode) -> Result<(), Box<dyn
         plugin: PluginDescriptor {
             name: fixture_name(mode).to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            operations: vec!["probe_build_system".to_owned()],
+            operations: vec![PluginOperation::ProbeBuildSystem],
             capabilities: if mode == AdversarialPluginMode::DeclareNetwork {
                 vec![PluginCapability::Network]
             } else {
@@ -61,7 +62,7 @@ pub fn run_adversarial_plugin(mode: AdversarialPluginMode) -> Result<(), Box<dyn
 
     let probe_line = next_line(&mut lines)?;
     let probe: ProbeBuildSystemRequest = decode_frame(&probe_line, DEFAULT_MAX_FRAME_BYTES)?;
-    if probe.protocol != PROTOCOL_V1 || probe.frame_type != "probe_build_system" {
+    if probe.protocol != PROTOCOL_V1 || probe.frame_type != PluginOperation::ProbeBuildSystem {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid probe frame").into());
     }
 
