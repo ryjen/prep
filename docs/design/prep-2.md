@@ -1,6 +1,6 @@
 # Prep 2 architecture
 
-Status: **proposed**
+Status: **accepted**
 
 ## 1. Purpose
 
