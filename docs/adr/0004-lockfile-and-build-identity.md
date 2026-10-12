@@ -1,6 +1,6 @@
 # ADR 0004: Use a generated TOML lockfile and include toolchain identity in build results
 
-Status: **proposed**
+Status: **accepted**
 
 ## Context
 
