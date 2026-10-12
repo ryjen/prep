@@ -1,6 +1,6 @@
 # ADR 0003: Implement Git and archive source providers in the trusted core first
 
-Status: **proposed**
+Status: **accepted**
 
 ## Context
 

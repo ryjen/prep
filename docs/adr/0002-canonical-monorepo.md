@@ -1,6 +1,6 @@
 # ADR 0002: Make `ryjen/prep` the canonical Prep 2 monorepo
 
-Status: **proposed**
+Status: **accepted**
 
 ## Context
 

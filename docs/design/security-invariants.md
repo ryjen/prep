@@ -1,6 +1,6 @@
 # Prep 2 security invariants
 
-Status: **proposed**
+Status: **accepted**
 
 This document defines security properties the implementation must preserve. They are design constraints, not optional hardening tasks.
 
