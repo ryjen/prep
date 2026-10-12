@@ -1,6 +1,6 @@
 # Prep 2 roadmap
 
-Status: **proposed**
+Status: **active**
 
 This roadmap orders implementation by architectural risk. The objective is to prove the trust boundaries and contracts before porting the historical feature surface.
 
