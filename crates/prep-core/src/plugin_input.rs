@@ -254,7 +254,6 @@ pub fn required_builder_capabilities(
     ];
     const INSTALL: &[PluginCapability] = &[
         PluginCapability::ProcessSpawn,
-        PluginCapability::FilesystemReadSource,
         PluginCapability::FilesystemWriteStaging,
     ];
 
@@ -311,7 +310,7 @@ fn path_to_protocol_string(
 }
 
 fn validate_environment_key(key: &str) -> Result<(), PluginInputError> {
-    if key.is_empty() || key.contains(['=', '\0']) {
+    if key.is_empty() || key.chars().any(|character| matches!(character, '=' | '\0')) {
         return Err(PluginInputError::InvalidEnvironmentKey(key.to_owned()));
     }
     Ok(())
@@ -433,7 +432,10 @@ mod tests {
             frame.context.dependency_prefixes,
             vec![dependency.to_string_lossy().into_owned()]
         );
-        assert_eq!(frame.context.environment.get("PATH"), Some(&"/tools/bin".to_owned()));
+        assert_eq!(
+            frame.context.environment.get("PATH").map(String::as_str),
+            Some("/tools/bin")
+        );
         assert!(frame.context.offline);
     }
 
