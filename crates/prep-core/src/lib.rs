@@ -14,6 +14,7 @@ pub use plugin::{
 };
 
 pub use plugin_input::{
-    BuilderRequestInput, PluginEnvironmentPolicy, PluginExecutionRoots, PluginInputError,
-    SanitizedPluginEnvironment, authorize_builder_operation, required_builder_capabilities,
+    AuthorizedBuilderOperation, BuilderRequestInput, PluginEnvironmentPolicy, PluginExecutionRoots,
+    PluginInputError, SanitizedPluginEnvironment, authorize_builder_operation,
+    required_builder_capabilities,
 };
