@@ -201,10 +201,9 @@ pub fn probe_build_system_with_policy(
 
 pub fn probe_build_system_with_policies(
     executable: &Path,
-    process_policy: PluginProcessPolicy,
+    policy: PluginProcessPolicy,
     admission_policy: PluginAdmissionPolicy,
 ) -> Result<PluginProbe, PluginProbeError> {
-    let policy = process_policy;
     let mut command = Command::new(executable);
     command
         .env_clear()
