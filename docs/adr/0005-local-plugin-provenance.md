@@ -1,6 +1,6 @@
 # ADR 0005: No remote third-party plugin installation in protocol v1
 
-Status: **proposed**
+Status: **accepted**
 
 ## Context
 
