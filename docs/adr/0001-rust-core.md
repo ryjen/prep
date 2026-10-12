@@ -1,6 +1,6 @@
 # ADR 0001: Use Rust for the Prep 2 core
 
-Status: **proposed**
+Status: **accepted**
 
 ## Context
 
