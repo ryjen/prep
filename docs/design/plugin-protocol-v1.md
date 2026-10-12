@@ -165,6 +165,8 @@ Capabilities should be declarative and coarse enough to remain stable. Platform-
 
 Prep refuses to authorize/request an operation whose required capabilities were not declared or are denied by policy.
 
+In the initial runtime-only implementation, Prep learns the declaration from the plugin handshake and evaluates it before sending the operational request. That check is fail-closed for Prep-authorized work, but it occurs **after the executable has been spawned**. Until local plugin identity/manifest work provides a verified pre-spawn declaration, runtime admission must not be described as preventing a malicious plugin from exercising ambient invoking-user authority during startup or handshake.
+
 **Capability declarations are not, by themselves, an OS sandbox.** Without platform containment, a malicious executable plugin may attempt actions beyond its declaration. Prep v1 must not claim otherwise. Where a hardened runner can enforce filesystem/network/process restrictions, those controls strengthen the same policy model; otherwise capability policy is admission control plus attribution.
 
 ## 7. Execution context
