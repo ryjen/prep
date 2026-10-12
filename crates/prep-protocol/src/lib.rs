@@ -76,9 +76,7 @@ impl HelloFrame {
     }
 }
 
-#[derive(
-    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
-)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PluginCapability {
     #[serde(rename = "network")]
     Network,
