@@ -76,13 +76,50 @@ impl HelloFrame {
     }
 }
 
+#[derive(
+    Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
+)]
+pub enum PluginCapability {
+    #[serde(rename = "network")]
+    Network,
+    #[serde(rename = "process.spawn")]
+    ProcessSpawn,
+    #[serde(rename = "filesystem.read.source")]
+    FilesystemReadSource,
+    #[serde(rename = "filesystem.write.staging")]
+    FilesystemWriteStaging,
+    #[serde(rename = "host.package_manager")]
+    HostPackageManager,
+    #[serde(rename = "privilege")]
+    Privilege,
+    #[serde(rename = "prompt")]
+    Prompt,
+    #[serde(rename = "prompt.secret")]
+    PromptSecret,
+}
+
+impl fmt::Display for PluginCapability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Network => "network",
+            Self::ProcessSpawn => "process.spawn",
+            Self::FilesystemReadSource => "filesystem.read.source",
+            Self::FilesystemWriteStaging => "filesystem.write.staging",
+            Self::HostPackageManager => "host.package_manager",
+            Self::Privilege => "privilege",
+            Self::Prompt => "prompt",
+            Self::PromptSecret => "prompt.secret",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PluginDescriptor {
     pub name: String,
     pub version: String,
     pub operations: Vec<String>,
-    pub capabilities: Vec<String>,
+    pub capabilities: Vec<PluginCapability>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -163,6 +200,25 @@ mod tests {
                 maximum: 4
             }
         ));
+    }
+
+    #[test]
+    fn capability_round_trips_as_protocol_string() {
+        let encoded =
+            encode_frame(&PluginCapability::ProcessSpawn).expect("capability should serialize");
+        assert_eq!(encoded, "\"process.spawn\"");
+
+        let decoded: PluginCapability =
+            decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).expect("capability should parse");
+        assert_eq!(decoded, PluginCapability::ProcessSpawn);
+    }
+
+    #[test]
+    fn unknown_capability_fails_closed() {
+        let input = r#"{"protocol":"prep.plugin/1","id":"hello","type":"hello_result","plugin":{"name":"x","version":"1","operations":["probe_build_system"],"capabilities":["filesystem.root"]}}"#;
+        let error = decode_frame::<HelloResultFrame>(input, DEFAULT_MAX_FRAME_BYTES)
+            .expect_err("unknown capability should be rejected");
+        assert!(matches!(error, CodecError::InvalidJson(_)));
     }
 
     #[test]
