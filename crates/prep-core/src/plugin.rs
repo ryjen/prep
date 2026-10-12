@@ -513,8 +513,7 @@ fn validate_handshake(hello: &HelloResultFrame) -> Result<(), PluginProbeError> 
     if !hello
         .plugin
         .operations
-        .iter()
-        .any(|operation| *operation == PluginOperation::ProbeBuildSystem)
+        .contains(&PluginOperation::ProbeBuildSystem)
     {
         return Err(PluginProbeError::InvalidHandshake(
             "plugin did not declare probe_build_system".to_owned(),
