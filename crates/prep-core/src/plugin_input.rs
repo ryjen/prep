@@ -1,8 +1,8 @@
 use crate::plugin::PluginAdmissionPolicy;
 use prep_manifest::{PackageName, PackageVersion};
 use prep_protocol::{
-    BuilderOperation, BuilderRequestFrame, PluginCapability, PluginExecutionContext, PluginOperation,
-    PluginPackage,
+    BuilderOperation, BuilderRequestFrame, PluginCapability, PluginExecutionContext,
+    PluginOperation, PluginPackage,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -57,7 +57,11 @@ impl fmt::Display for PluginInputError {
                 label,
                 path,
                 message,
-            } => write!(formatter, "{label} {} is invalid: {message}", path.display()),
+            } => write!(
+                formatter,
+                "{label} {} is invalid: {message}",
+                path.display()
+            ),
             Self::NonUtf8Path { label, path } => {
                 write!(formatter, "{label} is not valid UTF-8: {}", path.display())
             }
@@ -65,13 +69,19 @@ impl fmt::Display for PluginInputError {
                 write!(formatter, "invalid plugin environment key {key:?}")
             }
             Self::InvalidEnvironmentValue(key) => {
-                write!(formatter, "plugin environment value for {key:?} contains NUL")
+                write!(
+                    formatter,
+                    "plugin environment value for {key:?} contains NUL"
+                )
             }
             Self::InvalidArgument { index } => {
                 write!(formatter, "plugin argument {index} contains NUL")
             }
             Self::MissingDeclaredOperation { operation } => {
-                write!(formatter, "plugin did not declare builder operation {operation}")
+                write!(
+                    formatter,
+                    "plugin did not declare builder operation {operation}"
+                )
             }
             Self::MissingDeclaredCapability {
                 operation,
@@ -243,7 +253,10 @@ impl BuilderRequestInput {
             PluginExecutionContext {
                 source_dir: path_to_protocol_string("source directory", self.roots.source_dir())?,
                 build_dir: path_to_protocol_string("build directory", self.roots.build_dir())?,
-                staging_dir: path_to_protocol_string("staging directory", self.roots.staging_dir())?,
+                staging_dir: path_to_protocol_string(
+                    "staging directory",
+                    self.roots.staging_dir(),
+                )?,
                 dependency_prefixes,
                 environment: self.environment.values,
                 offline: self.offline,
@@ -282,9 +295,7 @@ pub fn authorize_builder_operation(
 }
 
 #[must_use]
-pub fn required_builder_capabilities(
-    operation: BuilderOperation,
-) -> &'static [PluginCapability] {
+pub fn required_builder_capabilities(operation: BuilderOperation) -> &'static [PluginCapability] {
     const SPAWN: &[PluginCapability] = &[PluginCapability::ProcessSpawn];
     const READ_AND_SPAWN: &[PluginCapability] = &[
         PluginCapability::ProcessSpawn,
@@ -302,10 +313,7 @@ pub fn required_builder_capabilities(
     }
 }
 
-fn canonical_real_directory(
-    label: &'static str,
-    path: &Path,
-) -> Result<PathBuf, PluginInputError> {
+fn canonical_real_directory(label: &'static str, path: &Path) -> Result<PathBuf, PluginInputError> {
     if !path.is_absolute() {
         return Err(PluginInputError::InvalidDirectory {
             label,
@@ -334,10 +342,7 @@ fn canonical_real_directory(
     })
 }
 
-fn path_to_protocol_string(
-    label: &'static str,
-    path: &Path,
-) -> Result<String, PluginInputError> {
+fn path_to_protocol_string(label: &'static str, path: &Path) -> Result<String, PluginInputError> {
     path.to_str()
         .map(ToOwned::to_owned)
         .ok_or_else(|| PluginInputError::NonUtf8Path {
@@ -520,7 +525,10 @@ mod tests {
         .into_frame()
         .expect_err("NUL argument must fail");
 
-        assert!(matches!(error, PluginInputError::InvalidArgument { index: 0 }));
+        assert!(matches!(
+            error,
+            PluginInputError::InvalidArgument { index: 0 }
+        ));
     }
 
     #[test]
