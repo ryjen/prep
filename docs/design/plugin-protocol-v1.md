@@ -1,6 +1,6 @@
 # Plugin Protocol v1
 
-Status: **proposed**
+Status: **accepted**
 
 ## 1. Objective
 
