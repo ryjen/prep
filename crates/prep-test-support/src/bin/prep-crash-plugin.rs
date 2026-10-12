@@ -1,6 +1,6 @@
 use prep_protocol::{
     DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginDescriptor,
-    ProbeBuildSystemRequest, ResultFrame, decode_frame, encode_frame,
+    PluginOperation, ProbeBuildSystemRequest, ResultFrame, decode_frame, encode_frame,
 };
 use serde_json::json;
 use std::error::Error;
@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         plugin: PluginDescriptor {
             name: "crash-after-result".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
-            operations: vec!["probe_build_system".to_owned()],
+            operations: vec![PluginOperation::ProbeBuildSystem],
             capabilities: Vec::new(),
         },
     };

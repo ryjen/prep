@@ -1,6 +1,7 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -111,12 +112,68 @@ impl fmt::Display for PluginCapability {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PluginOperation {
+    #[serde(rename = "probe_build_system")]
+    ProbeBuildSystem,
+    #[serde(rename = "configure")]
+    Configure,
+    #[serde(rename = "build")]
+    Build,
+    #[serde(rename = "test")]
+    Test,
+    #[serde(rename = "install_to_staging")]
+    InstallToStaging,
+    #[serde(rename = "probe_host_dependency")]
+    ProbeHostDependency,
+    #[serde(rename = "plan_host_change")]
+    PlanHostChange,
+    #[serde(rename = "apply_host_change")]
+    ApplyHostChange,
+}
+
+impl fmt::Display for PluginOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::ProbeBuildSystem => "probe_build_system",
+            Self::Configure => "configure",
+            Self::Build => "build",
+            Self::Test => "test",
+            Self::InstallToStaging => "install_to_staging",
+            Self::ProbeHostDependency => "probe_host_dependency",
+            Self::PlanHostChange => "plan_host_change",
+            Self::ApplyHostChange => "apply_host_change",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginPackage {
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PluginExecutionContext {
+    pub source_dir: String,
+    pub build_dir: String,
+    pub staging_dir: String,
+    #[serde(default)]
+    pub dependency_prefixes: Vec<String>,
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
+    #[serde(default)]
+    pub offline: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PluginDescriptor {
     pub name: String,
     pub version: String,
-    pub operations: Vec<String>,
+    pub operations: Vec<PluginOperation>,
     pub capabilities: Vec<PluginCapability>,
 }
 
@@ -136,7 +193,7 @@ pub struct ProbeBuildSystemRequest {
     pub protocol: String,
     pub id: String,
     #[serde(rename = "type")]
-    pub frame_type: String,
+    pub frame_type: PluginOperation,
     pub context: Value,
 }
 
@@ -146,7 +203,7 @@ impl ProbeBuildSystemRequest {
         Self {
             protocol: PROTOCOL_V1.to_owned(),
             id: id.into(),
-            frame_type: "probe_build_system".to_owned(),
+            frame_type: PluginOperation::ProbeBuildSystem,
             context: Value::Object(serde_json::Map::new()),
         }
     }
@@ -209,6 +266,46 @@ mod tests {
         let decoded: PluginCapability =
             decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).expect("capability should parse");
         assert_eq!(decoded, PluginCapability::ProcessSpawn);
+    }
+
+    #[test]
+    fn operation_round_trips_as_protocol_string() {
+        let encoded =
+            encode_frame(&PluginOperation::InstallToStaging).expect("operation should serialize");
+        assert_eq!(encoded, "\"install_to_staging\"");
+
+        let decoded: PluginOperation =
+            decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).expect("operation should parse");
+        assert_eq!(decoded, PluginOperation::InstallToStaging);
+    }
+
+    #[test]
+    fn unknown_operation_fails_closed() {
+        let input = r#"{"protocol":"prep.plugin/1","id":"hello","type":"hello_result","plugin":{"name":"x","version":"1","operations":["shell"],"capabilities":[]}}"#;
+        let error = decode_frame::<HelloResultFrame>(input, DEFAULT_MAX_FRAME_BYTES)
+            .expect_err("unknown operation should be rejected");
+        assert!(matches!(error, CodecError::InvalidJson(_)));
+    }
+
+    #[test]
+    fn execution_context_round_trips_and_rejects_unknown_fields() {
+        let context = PluginExecutionContext {
+            source_dir: "/source".to_owned(),
+            build_dir: "/build".to_owned(),
+            staging_dir: "/staging".to_owned(),
+            dependency_prefixes: vec!["/deps/a".to_owned()],
+            environment: BTreeMap::from([("PATH".to_owned(), "/tools/bin".to_owned())]),
+            offline: true,
+        };
+        let encoded = encode_frame(&context).expect("context should serialize");
+        let decoded: PluginExecutionContext =
+            decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).expect("context should parse");
+        assert_eq!(decoded, context);
+
+        let input = r#"{"source_dir":"/source","build_dir":"/build","staging_dir":"/staging","unexpected":true}"#;
+        let error = decode_frame::<PluginExecutionContext>(input, DEFAULT_MAX_FRAME_BYTES)
+            .expect_err("unknown context field should be rejected");
+        assert!(matches!(error, CodecError::InvalidJson(_)));
     }
 
     #[test]
