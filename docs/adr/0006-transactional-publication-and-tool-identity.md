@@ -1,6 +1,6 @@
 # ADR 0006: Keep transactional publication on one filesystem and fingerprint output-affecting tools
 
-Status: **proposed**
+Status: **accepted**
 
 ## Context
 
