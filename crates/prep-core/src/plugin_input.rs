@@ -1,7 +1,8 @@
 use crate::plugin::PluginAdmissionPolicy;
 use prep_manifest::{PackageName, PackageVersion};
 use prep_protocol::{
-    BuilderOperation, BuilderRequestFrame, PluginCapability, PluginExecutionContext, PluginPackage,
+    BuilderOperation, BuilderRequestFrame, PluginCapability, PluginExecutionContext, PluginOperation,
+    PluginPackage,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -30,6 +31,9 @@ pub enum PluginInputError {
     InvalidEnvironmentValue(String),
     InvalidArgument {
         index: usize,
+    },
+    MissingDeclaredOperation {
+        operation: BuilderOperation,
     },
     MissingDeclaredCapability {
         operation: BuilderOperation,
@@ -65,6 +69,9 @@ impl fmt::Display for PluginInputError {
             }
             Self::InvalidArgument { index } => {
                 write!(formatter, "plugin argument {index} contains NUL")
+            }
+            Self::MissingDeclaredOperation { operation } => {
+                write!(formatter, "plugin did not declare builder operation {operation}")
             }
             Self::MissingDeclaredCapability {
                 operation,
@@ -184,10 +191,22 @@ impl SanitizedPluginEnvironment {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AuthorizedBuilderOperation {
+    operation: BuilderOperation,
+}
+
+impl AuthorizedBuilderOperation {
+    #[must_use]
+    pub fn operation(self) -> BuilderOperation {
+        self.operation
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BuilderRequestInput {
     pub id: String,
-    pub operation: BuilderOperation,
+    pub operation: AuthorizedBuilderOperation,
     pub package_name: PackageName,
     pub package_version: PackageVersion,
     pub roots: PluginExecutionRoots,
@@ -216,7 +235,7 @@ impl BuilderRequestInput {
 
         Ok(BuilderRequestFrame::new(
             self.id,
-            self.operation,
+            self.operation.operation(),
             PluginPackage {
                 name: self.package_name.as_str().to_owned(),
                 version: self.package_version.as_str().to_owned(),
@@ -236,9 +255,15 @@ impl BuilderRequestInput {
 
 pub fn authorize_builder_operation(
     operation: BuilderOperation,
+    declared_operations: &[PluginOperation],
     declared_capabilities: &[PluginCapability],
     policy: &PluginAdmissionPolicy,
-) -> Result<(), PluginInputError> {
+) -> Result<AuthorizedBuilderOperation, PluginInputError> {
+    let protocol_operation = PluginOperation::from(operation);
+    if !declared_operations.contains(&protocol_operation) {
+        return Err(PluginInputError::MissingDeclaredOperation { operation });
+    }
+
     for capability in required_builder_capabilities(operation) {
         if !declared_capabilities.contains(capability) {
             return Err(PluginInputError::MissingDeclaredCapability {
@@ -253,7 +278,7 @@ pub fn authorize_builder_operation(
             });
         }
     }
-    Ok(())
+    Ok(AuthorizedBuilderOperation { operation })
 }
 
 #[must_use]
@@ -426,7 +451,17 @@ mod tests {
 
         let frame = BuilderRequestInput {
             id: "42".to_owned(),
-            operation: BuilderOperation::Configure,
+            operation: authorize_builder_operation(
+                BuilderOperation::Configure,
+                &[PluginOperation::Configure],
+                required_builder_capabilities(BuilderOperation::Configure),
+                &PluginAdmissionPolicy::allow(
+                    required_builder_capabilities(BuilderOperation::Configure)
+                        .iter()
+                        .copied(),
+                ),
+            )
+            .expect("authorize configure"),
             package_name: PackageName::parse("hello").expect("package name"),
             package_version: PackageVersion::parse("1.0.0").expect("package version"),
             roots,
@@ -463,7 +498,17 @@ mod tests {
 
         let error = BuilderRequestInput {
             id: "42".to_owned(),
-            operation: BuilderOperation::Build,
+            operation: authorize_builder_operation(
+                BuilderOperation::Build,
+                &[PluginOperation::Build],
+                required_builder_capabilities(BuilderOperation::Build),
+                &PluginAdmissionPolicy::allow(
+                    required_builder_capabilities(BuilderOperation::Build)
+                        .iter()
+                        .copied(),
+                ),
+            )
+            .expect("authorize build"),
             package_name: PackageName::parse("hello").expect("package name"),
             package_version: PackageVersion::parse("1.0.0").expect("package version"),
             roots,
@@ -481,10 +526,26 @@ mod tests {
     #[test]
     fn operation_authority_requires_declared_and_allowed_capabilities() {
         let operation = BuilderOperation::Configure;
+        let protocol_operation = PluginOperation::Configure;
         let required = required_builder_capabilities(operation);
 
         let error = authorize_builder_operation(
             operation,
+            &[],
+            required,
+            &PluginAdmissionPolicy::allow(required.iter().copied()),
+        )
+        .expect_err("missing operation declaration must fail");
+        assert!(matches!(
+            error,
+            PluginInputError::MissingDeclaredOperation {
+                operation: BuilderOperation::Configure
+            }
+        ));
+
+        let error = authorize_builder_operation(
+            operation,
+            &[protocol_operation],
             &[PluginCapability::ProcessSpawn],
             &PluginAdmissionPolicy::allow(required.iter().copied()),
         )
@@ -499,6 +560,7 @@ mod tests {
 
         let error = authorize_builder_operation(
             operation,
+            &[protocol_operation],
             required,
             &PluginAdmissionPolicy::allow([PluginCapability::ProcessSpawn]),
         )
@@ -511,11 +573,13 @@ mod tests {
             }
         ));
 
-        authorize_builder_operation(
+        let authorized = authorize_builder_operation(
             operation,
+            &[protocol_operation],
             required,
             &PluginAdmissionPolicy::allow(required.iter().copied()),
         )
         .expect("declared and allowed capabilities should pass");
+        assert_eq!(authorized.operation(), operation);
     }
 }
