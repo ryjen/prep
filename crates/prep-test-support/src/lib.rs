@@ -1,8 +1,8 @@
 //! Test fixtures and synthetic plugin binaries used by Prep integration tests.
 
 use prep_protocol::{
-    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginDescriptor,
-    ProbeBuildSystemRequest, ResultFrame, decode_frame, encode_frame,
+    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginCapability,
+    PluginDescriptor, ProbeBuildSystemRequest, ResultFrame, decode_frame, encode_frame,
 };
 use serde_json::json;
 use std::error::Error;
@@ -21,6 +21,7 @@ pub enum AdversarialPluginMode {
     FloodStderr,
     SpawnChild,
     SpawnChildExit,
+    DeclareNetwork,
 }
 
 pub fn run_adversarial_plugin(mode: AdversarialPluginMode) -> Result<(), Box<dyn Error>> {
@@ -48,7 +49,11 @@ pub fn run_adversarial_plugin(mode: AdversarialPluginMode) -> Result<(), Box<dyn
             name: fixture_name(mode).to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             operations: vec!["probe_build_system".to_owned()],
-            capabilities: Vec::new(),
+            capabilities: if mode == AdversarialPluginMode::DeclareNetwork {
+                vec![PluginCapability::Network]
+            } else {
+                Vec::new()
+            },
         },
     };
     writeln!(stdout, "{}", encode_frame(&hello_result)?)?;
@@ -92,6 +97,7 @@ pub fn run_adversarial_plugin(mode: AdversarialPluginMode) -> Result<(), Box<dyn
             thread::sleep(FIXTURE_HANG);
             Ok(())
         }
+        AdversarialPluginMode::DeclareNetwork => write_success_result(&mut stdout, probe),
     }
 }
 
@@ -134,6 +140,7 @@ fn fixture_name(mode: AdversarialPluginMode) -> &'static str {
         AdversarialPluginMode::FloodStderr => "flood-stderr",
         AdversarialPluginMode::SpawnChild => "spawn-child",
         AdversarialPluginMode::SpawnChildExit => "spawn-child-exit",
+        AdversarialPluginMode::DeclareNetwork => "declare-network",
     }
 }
 

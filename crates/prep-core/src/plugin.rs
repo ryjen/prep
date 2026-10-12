@@ -1,7 +1,8 @@
 use prep_protocol::{
-    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, ProbeBuildSystemRequest,
-    ResultFrame, decode_frame, encode_frame,
+    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginCapability,
+    ProbeBuildSystemRequest, ResultFrame, decode_frame, encode_frame,
 };
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -52,6 +53,30 @@ impl Default for PluginProcessPolicy {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PluginAdmissionPolicy {
+    allowed_capabilities: BTreeSet<PluginCapability>,
+}
+
+impl PluginAdmissionPolicy {
+    #[must_use]
+    pub fn deny_all() -> Self {
+        Self::default()
+    }
+
+    #[must_use]
+    pub fn allow(capabilities: impl IntoIterator<Item = PluginCapability>) -> Self {
+        Self {
+            allowed_capabilities: capabilities.into_iter().collect(),
+        }
+    }
+
+    #[must_use]
+    pub fn allows(&self, capability: PluginCapability) -> bool {
+        self.allowed_capabilities.contains(&capability)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PluginPhase {
     Handshake,
@@ -93,6 +118,9 @@ pub enum PluginProbeError {
         code: String,
         message: String,
     },
+    PolicyDenied {
+        capability: PluginCapability,
+    },
     ProcessFailed {
         code: Option<i32>,
         diagnostics: PluginDiagnostics,
@@ -127,6 +155,9 @@ impl fmt::Display for PluginProbeError {
             Self::PluginReturnedError { code, message } => {
                 write!(formatter, "plugin returned {code}: {message}")
             }
+            Self::PolicyDenied { capability } => {
+                write!(formatter, "plugin capability {capability} denied by policy")
+            }
             Self::ProcessFailed { code, .. } => {
                 write!(formatter, "plugin process failed with status {code:?}")
             }
@@ -154,12 +185,24 @@ impl Error for PluginProbeError {
 }
 
 pub fn probe_build_system(executable: &Path) -> Result<PluginProbe, PluginProbeError> {
-    probe_build_system_with_policy(executable, PluginProcessPolicy::default())
+    probe_build_system_with_policies(
+        executable,
+        PluginProcessPolicy::default(),
+        PluginAdmissionPolicy::default(),
+    )
 }
 
 pub fn probe_build_system_with_policy(
     executable: &Path,
     policy: PluginProcessPolicy,
+) -> Result<PluginProbe, PluginProbeError> {
+    probe_build_system_with_policies(executable, policy, PluginAdmissionPolicy::default())
+}
+
+pub fn probe_build_system_with_policies(
+    executable: &Path,
+    policy: PluginProcessPolicy,
+    admission_policy: PluginAdmissionPolicy,
 ) -> Result<PluginProbe, PluginProbeError> {
     let mut command = Command::new(executable);
     command
@@ -194,6 +237,7 @@ pub fn probe_build_system_with_policy(
         let hello: HelloResultFrame = decode_frame(&hello_line, policy.max_frame_bytes)
             .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
         validate_handshake(&hello)?;
+        admit_capabilities(&hello.plugin.capabilities, &admission_policy)?;
 
         write_protocol_frame(&mut stdin, &ProbeBuildSystemRequest::new(PROBE_ID))?;
         let result_line = receive_protocol_line(&stdout, deadline, PluginPhase::Result)?;
@@ -435,6 +479,20 @@ impl DiagnosticCapture {
     }
 }
 
+fn admit_capabilities(
+    capabilities: &[PluginCapability],
+    policy: &PluginAdmissionPolicy,
+) -> Result<(), PluginProbeError> {
+    for capability in capabilities {
+        if !policy.allows(*capability) {
+            return Err(PluginProbeError::PolicyDenied {
+                capability: *capability,
+            });
+        }
+    }
+    Ok(())
+}
+
 fn validate_handshake(hello: &HelloResultFrame) -> Result<(), PluginProbeError> {
     if hello.protocol != PROTOCOL_V1 {
         return Err(PluginProbeError::InvalidHandshake(format!(
@@ -653,6 +711,29 @@ mod tests {
             validate_result(&result),
             Err(PluginProbeError::InvalidResult(_))
         ));
+    }
+
+    #[test]
+    fn admission_policy_denies_declared_capability_by_default() {
+        let error = admit_capabilities(
+            &[PluginCapability::Network],
+            &PluginAdmissionPolicy::default(),
+        )
+        .expect_err("default policy should deny network");
+
+        assert!(matches!(
+            error,
+            PluginProbeError::PolicyDenied {
+                capability: PluginCapability::Network
+            }
+        ));
+    }
+
+    #[test]
+    fn admission_policy_allows_explicit_capability() {
+        let policy = PluginAdmissionPolicy::allow([PluginCapability::Network]);
+        admit_capabilities(&[PluginCapability::Network], &policy)
+            .expect("explicitly allowed capability should be admitted");
     }
 
     #[test]
