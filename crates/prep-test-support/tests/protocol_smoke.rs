@@ -46,6 +46,6 @@ fn unsuccessful_plugin_process_is_typed_failure() {
 
     assert!(matches!(
         error,
-        CliError::Probe(PluginProbeError::ProcessFailed(Some(17)))
+        CliError::Probe(PluginProbeError::ProcessFailed { code: Some(17), .. })
     ));
 }
