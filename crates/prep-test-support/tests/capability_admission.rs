@@ -23,12 +23,8 @@ fn declared_network_capability_is_denied_by_default() {
 fn explicitly_allowed_network_capability_reaches_the_operation() {
     let plugin = Path::new(env!("CARGO_BIN_EXE_prep-network-capability-plugin"));
     let admission = PluginAdmissionPolicy::allow([PluginCapability::Network]);
-    let probe = probe_build_system_with_policies(
-        plugin,
-        PluginProcessPolicy::default(),
-        admission,
-    )
-    .expect("explicitly allowed capability should admit the operation");
+    let probe = probe_build_system_with_policies(plugin, PluginProcessPolicy::default(), admission)
+        .expect("explicitly allowed capability should admit the operation");
 
     assert_eq!(probe.name, "declare-network");
     assert!(probe.supported);
