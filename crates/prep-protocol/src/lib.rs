@@ -147,6 +147,35 @@ impl fmt::Display for PluginOperation {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BuilderOperation {
+    #[serde(rename = "configure")]
+    Configure,
+    #[serde(rename = "build")]
+    Build,
+    #[serde(rename = "test")]
+    Test,
+    #[serde(rename = "install_to_staging")]
+    InstallToStaging,
+}
+
+impl fmt::Display for BuilderOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        PluginOperation::from(*self).fmt(formatter)
+    }
+}
+
+impl From<BuilderOperation> for PluginOperation {
+    fn from(value: BuilderOperation) -> Self {
+        match value {
+            BuilderOperation::Configure => Self::Configure,
+            BuilderOperation::Build => Self::Build,
+            BuilderOperation::Test => Self::Test,
+            BuilderOperation::InstallToStaging => Self::InstallToStaging,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PluginPackage {
@@ -205,6 +234,39 @@ impl ProbeBuildSystemRequest {
             id: id.into(),
             frame_type: PluginOperation::ProbeBuildSystem,
             context: Value::Object(serde_json::Map::new()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BuilderRequestFrame {
+    pub protocol: String,
+    pub id: String,
+    #[serde(rename = "type")]
+    pub operation: BuilderOperation,
+    pub package: PluginPackage,
+    pub context: PluginExecutionContext,
+    #[serde(default)]
+    pub arguments: Vec<String>,
+}
+
+impl BuilderRequestFrame {
+    #[must_use]
+    pub fn new(
+        id: impl Into<String>,
+        operation: BuilderOperation,
+        package: PluginPackage,
+        context: PluginExecutionContext,
+        arguments: Vec<String>,
+    ) -> Self {
+        Self {
+            protocol: PROTOCOL_V1.to_owned(),
+            id: id.into(),
+            operation,
+            package,
+            context,
+            arguments,
         }
     }
 }
@@ -305,6 +367,41 @@ mod tests {
         let input = r#"{"source_dir":"/source","build_dir":"/build","staging_dir":"/staging","unexpected":true}"#;
         let error = decode_frame::<PluginExecutionContext>(input, DEFAULT_MAX_FRAME_BYTES)
             .expect_err("unknown context field should be rejected");
+        assert!(matches!(error, CodecError::InvalidJson(_)));
+    }
+
+    #[test]
+    fn builder_request_round_trips_with_builder_only_operation() {
+        let request = BuilderRequestFrame::new(
+            "42",
+            BuilderOperation::Configure,
+            PluginPackage {
+                name: "hello".to_owned(),
+                version: "1.0.0".to_owned(),
+            },
+            PluginExecutionContext {
+                source_dir: "/source".to_owned(),
+                build_dir: "/build".to_owned(),
+                staging_dir: "/staging".to_owned(),
+                dependency_prefixes: Vec::new(),
+                environment: BTreeMap::new(),
+                offline: false,
+            },
+            vec!["-DCMAKE_BUILD_TYPE=Release".to_owned()],
+        );
+
+        let encoded = encode_frame(&request).expect("builder request should serialize");
+        let decoded: BuilderRequestFrame =
+            decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).expect("builder request should parse");
+        assert_eq!(decoded, request);
+        assert!(encoded.contains(r#""type":"configure""#));
+    }
+
+    #[test]
+    fn builder_request_rejects_host_operation() {
+        let input = r#"{"protocol":"prep.plugin/1","id":"42","type":"apply_host_change","package":{"name":"hello","version":"1.0.0"},"context":{"source_dir":"/source","build_dir":"/build","staging_dir":"/staging"},"arguments":[]}"#;
+        let error = decode_frame::<BuilderRequestFrame>(input, DEFAULT_MAX_FRAME_BYTES)
+            .expect_err("host operation must not decode as a builder request");
         assert!(matches!(error, CodecError::InvalidJson(_)));
     }
 
