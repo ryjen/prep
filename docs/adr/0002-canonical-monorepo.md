@@ -67,7 +67,7 @@ Once protocol v1 and plugin provenance/install policy are stable:
 - Cross-component design changes use one PR and one CI pipeline.
 - The repository becomes larger, but the implementation is easier to evolve coherently.
 - Existing submodule-based build assumptions are deprecated.
-- `prep-web` is not part of the Prep 2 critical path; any future UI should consume stable machine-readable CLI/core interfaces rather than shape core architecture.
+- `prep-web` is currently a private, empty repository and is explicitly excluded from Prep 2. Do not import, publicize, or create a web frontend to satisfy monorepo structure. If a UI is justified after CLI/API stabilization, start as an in-tree `apps/web` component backed by stable machine-readable contracts; split only for an independent release/ownership boundary.
 
 ## Revisit when
 
