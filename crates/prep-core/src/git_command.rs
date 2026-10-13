@@ -1,6 +1,6 @@
 //! Git subprocess boundary. Not yet a source materializer.
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Command;
 
 /// Construct Git without inherited user/system configuration or helpers.
 pub fn isolated_git_command(executable: &Path) -> Command {
@@ -25,20 +25,20 @@ pub fn isolated_git_command(executable: &Path) -> Command {
 
 /// Inspect a locked object ID, never an arbitrary reference or option.
 /// Caller must bound process duration and output before using this in production.
-pub fn inspect_locked_tree(
+pub fn prepare_locked_tree_inspection(
     executable: &Path,
     repository: &Path,
     revision: &str,
-) -> std::io::Result<Output> {
+) -> std::io::Result<Command> {
     if !matches!(revision.len(), 40 | 64)
         || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
         return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid pinned commit"));
     }
-    isolated_git_command(executable)
-        .arg("-C").arg(repository)
-        .arg("ls-tree").arg("-r").arg("-z").arg("--full-tree").arg(revision)
-        .output()
+    let mut command = isolated_git_command(executable);
+    command.arg("-C").arg(repository)
+        .arg("ls-tree").arg("-r").arg("-z").arg("--full-tree").arg(revision);
+    Ok(command)
 }
 
 #[cfg(test)]
@@ -48,7 +48,7 @@ mod tests {
     fn rejects_unpinned_revision_before_spawning() {
         for bad in ["HEAD", "main", "--upload-pack=/bin/sh", "", "aabb"] {
             assert_eq!(
-                inspect_locked_tree(Path::new("/nonexistent/git"), Path::new("."), bad)
+                prepare_locked_tree_inspection(Path::new("/nonexistent/git"), Path::new("."), bad)
                     .unwrap_err().kind(),
                 std::io::ErrorKind::InvalidInput
             );
