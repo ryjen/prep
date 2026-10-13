@@ -172,6 +172,7 @@ impl ProjectPaths {
 pub struct Store {
     root: PathBuf,
     staging_root: PathBuf,
+    source_staging_root: PathBuf,
     lock_root: PathBuf,
     results_sha256_root: PathBuf,
     store_lock_path: PathBuf,
@@ -186,6 +187,7 @@ impl Store {
         require_real_directory(&root, "store root")?;
 
         let staging_root = ensure_child_directory(&root, ".staging")?;
+        let source_staging_root = ensure_child_directory(&root, ".source-staging")?;
         let lock_root = ensure_child_directory(&root, ".locks")?;
         let results_root = ensure_child_directory(&root, "results")?;
         let results_sha256_root = ensure_child_directory(&results_root, "sha256")?;
@@ -195,6 +197,7 @@ impl Store {
         Ok(Self {
             root,
             staging_root,
+            source_staging_root,
             lock_root,
             results_sha256_root,
             store_lock_path,
@@ -260,6 +263,64 @@ impl Store {
         ))
     }
 
+    /// Allocate an unverified source workspace isolated from build-result staging.
+    /// Source bytes placed here cannot be published using `StoreTransaction::commit`.
+    /// The workspace is deleted on drop; it does not imply source verification.
+    pub fn begin_unverified_source(&self) -> Result<UnverifiedSourceStage, StoreError> {
+        let _store_lock = self.lock_store()?;
+        for _ in 0..128 {
+            let id = transaction_id();
+            let lock_path = self.lock_root.join(format!("{id}.lock"));
+            let lease = match create_new_lock_file(&lock_path) {
+                Ok(file) => file,
+                Err(StoreError::Io { source, .. })
+                    if source.kind() == std::io::ErrorKind::AlreadyExists =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            lease
+                .lock()
+                .map_err(|source| io_error("lock source staging lease", &lock_path, source))?;
+            let path = self.source_staging_root.join(&id);
+            #[cfg(unix)]
+            let created = {
+                use std::os::unix::fs::DirBuilderExt;
+                let mut builder = fs::DirBuilder::new();
+                builder.mode(0o700);
+                builder.create(&path)
+            };
+            #[cfg(not(unix))]
+            let created = fs::create_dir(&path);
+            match created {
+                Ok(()) => {
+                    return Ok(UnverifiedSourceStage {
+                        store: self.clone(),
+                        path,
+                        lock_path,
+                        lease: Some(lease),
+                        finished: false,
+                    });
+                }
+                Err(source) => {
+                    release_and_remove_lock_file(lease, &lock_path)?;
+                    if source.kind() == std::io::ErrorKind::AlreadyExists {
+                        continue;
+                    }
+                    return Err(io_error(
+                        "create private source staging directory",
+                        &path,
+                        source,
+                    ));
+                }
+            }
+        }
+        Err(StoreError::InvalidPath(
+            "unable to allocate a private source staging transaction".to_owned(),
+        ))
+    }
+
     pub fn get(&self, id: &StoreResultId) -> Result<Option<PublishedResult>, StoreError> {
         let _store_lock = self.lock_store()?;
         let path = self.result_path(id);
@@ -276,13 +337,20 @@ impl Store {
 
     pub fn recover_abandoned(&self) -> Result<usize, StoreError> {
         let _store_lock = self.lock_store()?;
+        let results = self.recover_staging_root(&self.staging_root)?;
+        let sources = self.recover_staging_root(&self.source_staging_root)?;
+        self.remove_orphaned_unlocked_leases()?;
+        Ok(results + sources)
+    }
+
+    fn recover_staging_root(&self, staging_root: &Path) -> Result<usize, StoreError> {
         let mut recovered = 0;
 
-        for entry in fs::read_dir(&self.staging_root)
-            .map_err(|source| io_error("read staging directory", &self.staging_root, source))?
+        for entry in fs::read_dir(staging_root)
+            .map_err(|source| io_error("read staging directory", staging_root, source))?
         {
-            let entry = entry
-                .map_err(|source| io_error("read staging entry", &self.staging_root, source))?;
+            let entry =
+                entry.map_err(|source| io_error("read staging entry", staging_root, source))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
@@ -307,7 +375,7 @@ impl Store {
                 });
             }
 
-            verify_real_directory_within(&self.staging_root, &path, "staging transaction")?;
+            verify_real_directory_within(staging_root, &path, "staging transaction")?;
             let lock_path = self.lock_root.join(format!("{id}.lock"));
             let lease = open_existing_lock_file(&lock_path)?;
 
@@ -326,7 +394,6 @@ impl Store {
             }
         }
 
-        self.remove_orphaned_unlocked_leases()?;
         Ok(recovered)
     }
 
@@ -352,7 +419,9 @@ impl Store {
                     path.display()
                 )));
             }
-            if node_exists(&self.staging_root.join(stem))? {
+            if node_exists(&self.staging_root.join(stem))?
+                || node_exists(&self.source_staging_root.join(stem))?
+            {
                 continue;
             }
 
@@ -371,6 +440,7 @@ impl Store {
     fn verify_layout(&self) -> Result<(), StoreError> {
         require_real_directory(&self.root, "store root")?;
         verify_real_directory_within(&self.root, &self.staging_root, "staging root")?;
+        verify_real_directory_within(&self.root, &self.source_staging_root, "source staging root")?;
         verify_real_directory_within(&self.root, &self.lock_root, "lock root")?;
         verify_real_directory_within(&self.root, &self.results_sha256_root, "result root")?;
         Ok(())
@@ -386,6 +456,57 @@ impl Store {
 
     fn result_path(&self, id: &StoreResultId) -> PathBuf {
         self.results_sha256_root.join(id.hex())
+    }
+}
+
+/// A leased, unverified workspace for source bytes. No publication method exists;
+/// callers must independently verify and safely materialize locked sources.
+pub struct UnverifiedSourceStage {
+    store: Store,
+    path: PathBuf,
+    lock_path: PathBuf,
+    lease: Option<File>,
+    finished: bool,
+}
+
+impl UnverifiedSourceStage {
+    /// The path is for untrusted staging only, never a build input or cache hit.
+    #[must_use]
+    pub fn untrusted_path(&self) -> &Path {
+        &self.path
+    }
+
+    #[cfg(test)]
+    fn leave_abandoned(mut self) -> Result<(PathBuf, PathBuf), StoreError> {
+        if let Some(lease) = self.lease.take() {
+            lease.unlock().map_err(|source| {
+                io_error("unlock source staging lease", &self.lock_path, source)
+            })?;
+        }
+        self.finished = true;
+        Ok((self.path.clone(), self.lock_path.clone()))
+    }
+}
+
+impl Drop for UnverifiedSourceStage {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        if let Ok(_store_lock) = self.store.lock_store() {
+            if verify_real_directory_within(
+                &self.store.source_staging_root,
+                &self.path,
+                "source staging transaction",
+            )
+            .is_ok()
+            {
+                let _ = fs::remove_dir_all(&self.path);
+            }
+            if let Some(lease) = self.lease.take() {
+                let _ = release_and_remove_lock_file(lease, &self.lock_path);
+            }
+        }
     }
 }
 
@@ -1209,6 +1330,55 @@ mod tests {
 
     fn result_id(byte: &str) -> StoreResultId {
         StoreResultId::parse(format!("sha256:{}", byte.repeat(64))).expect("valid result id")
+    }
+
+    #[test]
+    fn source_workspace_cannot_publish_build_results() {
+        let temp = TestDirectory::new("source-separation");
+        let store = Store::open(&temp.0.join("store")).expect("open store");
+        let result = result_id("9");
+        let path = {
+            let source = store.begin_unverified_source().expect("source stage");
+            let path = source.untrusted_path().to_owned();
+            assert!(path.starts_with(store.root().join(".source-staging")));
+            assert!(!path.starts_with(store.root().join(".staging")));
+            fs::write(path.join("unverified.tar"), b"unsafe").expect("write unverified");
+            assert!(store.get(&result).expect("query results").is_none());
+            assert_eq!(store.recover_abandoned().expect("recover while active"), 0);
+            path
+        };
+        assert!(!path.exists(), "source staging must clean up on drop");
+        assert!(store.get(&result).expect("query results").is_none());
+    }
+
+    #[test]
+    fn crashed_source_workspace_is_recovered_without_touching_active_sources() {
+        let temp = TestDirectory::new("source-recovery");
+        let store = Store::open(&temp.0.join("store")).expect("open store");
+        let active = store.begin_unverified_source().expect("active source");
+        let stale = store.begin_unverified_source().expect("stale source");
+        let (path, lock_path) = stale.leave_abandoned().expect("simulate crash");
+        assert!(path.exists());
+        assert!(lock_path.exists());
+        assert_eq!(store.recover_abandoned().expect("recover source"), 1);
+        assert!(!path.exists());
+        assert!(!lock_path.exists());
+        assert!(active.untrusted_path().exists());
+        drop(active);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_staging_directory_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TestDirectory::new("source-permissions");
+        let store = Store::open(&temp.0.join("store")).expect("open store");
+        let stage = store.begin_unverified_source().expect("source stage");
+        let mode = fs::metadata(stage.untrusted_path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0);
     }
 
     #[test]
