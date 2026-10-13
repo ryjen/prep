@@ -172,6 +172,28 @@ mod tests {
     }
 
     #[test]
+    fn verified_offsets_across_directory_and_multiblock_files() {
+        let large = vec![b'L'; 513];
+        let mut archive = make_archive("src/", b"", b'5');
+        archive.truncate(archive.len() - 1024);
+        let mut second = make_archive("src/large.bin", &large, b'0');
+        second.truncate(second.len() - 1024);
+        archive.extend_from_slice(&second);
+        archive.extend_from_slice(&make_archive("src/tail.txt", b"end", b'0'));
+        let source = locked(&archive);
+        let snapshot = read_verified_ustar_snapshot(
+            &source,
+            &mut Cursor::new(&archive),
+            ArchiveLimits::default(),
+            archive.len() as u64,
+        ).unwrap();
+        assert_eq!(snapshot.inventory().len(), 3);
+        assert_eq!(snapshot.file_bytes("src/"), None);
+        assert_eq!(snapshot.file_bytes("src/large.bin"), Some(&large[..]));
+        assert_eq!(snapshot.file_bytes("src/tail.txt"), Some(&b"end"[..]));
+    }
+
+    #[test]
     fn never_admits_wrong_digest_size_or_unsupported_member_types() {
         let archive = make_archive("link", b"", b'2');
         let source = locked(&archive);
