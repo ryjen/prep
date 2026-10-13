@@ -828,27 +828,31 @@ mod tests {
             package: "homebrew/core/postgresql@16".into(),
             version: Some("16.4".into()),
         };
-        assert!(prepare_host_planning_request(
-            &plugin,
-            &policy,
-            HostPlanningOperation::ProbeHostDependency,
-            brew,
-            "brew-1",
-        )
-        .is_ok());
+        assert!(
+            prepare_host_planning_request(
+                &plugin,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                brew,
+                "brew-1",
+            )
+            .is_ok()
+        );
         let debian = HostDependency {
             manager: "apt".into(),
             package: "libarchive-dev:amd64".into(),
             version: Some("2:3.7.4-1~deb12u1".into()),
         };
-        assert!(prepare_host_planning_request(
-            &plugin,
-            &policy,
-            HostPlanningOperation::ProbeHostDependency,
-            debian,
-            "apt-1",
-        )
-        .is_ok());
+        assert!(
+            prepare_host_planning_request(
+                &plugin,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                debian,
+                "apt-1",
+            )
+            .is_ok()
+        );
         let malformed = HostDependency {
             package: "../bad".into(),
             ..dependency
