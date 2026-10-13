@@ -21,4 +21,6 @@ pub use plugin_input::{
     required_builder_capabilities,
 };
 
-pub use source::{SourceVerificationError, validate_archive_entry_path, verify_archive_bytes, verify_git_head};
+pub use source::{
+    SourceVerificationError, validate_archive_entry_path, verify_archive_bytes, verify_git_head,
+};
