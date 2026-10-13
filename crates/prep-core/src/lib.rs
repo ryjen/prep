@@ -1,4 +1,5 @@
 mod archive_policy;
+mod archive_tar;
 mod git_command;
 mod git_tree;
 mod graph;
@@ -35,3 +36,5 @@ pub use archive_policy::{
 pub use git_tree::validate_git_tree_listing;
 
 pub use git_command::{isolated_git_command, prepare_locked_tree_inspection};
+
+pub use archive_tar::inspect_ustar;

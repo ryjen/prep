@@ -2,7 +2,7 @@
 //! an extractor must call it before any filesystem writes and must separately
 //! enforce descriptor-relative path containment.
 use crate::source::{SourceVerificationError, validate_archive_entry_path};
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveEntryKind {
@@ -50,16 +50,55 @@ pub fn validate_archive_inventory(
         return Err(SourceVerificationError::TooLarge);
     }
     let mut total = 0_u64;
-    let mut paths = BTreeSet::new();
+    let mut paths = BTreeMap::new();
+    // A canonical parent ID plus case-folded component distinguishes path
+    // spellings without repeatedly allocating every full prefix.
+    let mut components: BTreeMap<(usize, String), (String, usize)> = BTreeMap::new();
     for entry in entries {
         validate_archive_entry_path(&entry.name, limits.max_path_bytes)?;
+        // The v1 portable inventory admits only ASCII names; a later source
+        // provider can explicitly support Unicode filesystem normalization.
+        if !entry.name.is_ascii()
+            || entry.name.split('/').any(|component| {
+                component.ends_with('.')
+                    || component.ends_with(' ')
+                    || windows_reserved_name(component)
+            })
+        {
+            return Err(SourceVerificationError::UnsafeEntryPath);
+        }
         if !matches!(
             entry.kind,
             ArchiveEntryKind::RegularFile | ArchiveEntryKind::Directory
         ) {
             return Err(SourceVerificationError::UnsafeEntryPath);
         }
-        if !paths.insert(entry.name.as_str()) {
+        // Require consistent original spelling for every case-equivalent
+        // component, including implicitly created ancestor directories.
+        // This rejects Src/a + src/b on case-sensitive *and* insensitive hosts.
+        let mut parent = 0usize;
+        let mut depth = 0usize;
+        for component in entry.name.split('/') {
+            depth += 1;
+            if depth > 128 {
+                return Err(SourceVerificationError::TooLarge);
+            }
+            let key = (parent, component.to_ascii_lowercase());
+            if let Some((spelling, id)) = components.get(&key) {
+                if spelling != component {
+                    return Err(SourceVerificationError::UnsafeEntryPath);
+                }
+                parent = *id;
+            } else {
+                let id = components.len() + 1;
+                components.insert(key, (component.to_owned(), id));
+                parent = id;
+            }
+        }
+        if paths
+            .insert(entry.name.to_ascii_lowercase(), entry.kind)
+            .is_some()
+        {
             return Err(SourceVerificationError::UnsafeEntryPath);
         }
         if entry.kind == ArchiveEntryKind::Directory && entry.expanded_bytes != 0 {
@@ -75,20 +114,31 @@ pub fn validate_archive_inventory(
             return Err(SourceVerificationError::TooLarge);
         }
     }
-    for entry in entries {
-        for (index, byte) in entry.name.bytes().enumerate() {
-            if byte == b'/' && paths.contains(&entry.name[..index]) {
-                let parent = &entry.name[..index];
-                if entries
-                    .iter()
-                    .any(|item| item.name == parent && item.kind != ArchiveEntryKind::Directory)
-                {
-                    return Err(SourceVerificationError::UnsafeEntryPath);
-                }
+    for path in paths.keys() {
+        for (index, byte) in path.bytes().enumerate() {
+            if byte == b'/'
+                && matches!(
+                    paths.get(&path[..index]),
+                    Some(kind) if *kind != ArchiveEntryKind::Directory
+                )
+            {
+                return Err(SourceVerificationError::UnsafeEntryPath);
             }
         }
     }
     Ok(total)
+}
+
+fn windows_reserved_name(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or(component);
+    let name = stem.to_ascii_uppercase();
+    matches!(
+        name.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || (name.len() == 4
+        && (name.starts_with("COM") || name.starts_with("LPT"))
+        && name.as_bytes()[3].is_ascii_digit()
+        && name.as_bytes()[3] != b'0')
 }
 
 #[cfg(test)]
@@ -124,6 +174,26 @@ mod tests {
         let limits = ArchiveLimits::default();
         assert!(validate_archive_inventory(&[file("x", 1), file("x", 1)], limits).is_err());
         assert!(validate_archive_inventory(&[file("src", 1), file("src/a", 1)], limits).is_err());
+        assert!(
+            validate_archive_inventory(&[file("README", 1), file("readme", 1)], limits).is_err()
+        );
+        assert!(validate_archive_inventory(&[file("SRC", 1), file("src/a", 1)], limits).is_err());
+        assert!(validate_archive_inventory(&[file("Src/a", 1), file("src/b", 1)], limits).is_err());
+        assert!(validate_archive_inventory(&[file("A/x", 1), file("a/y", 1)], limits).is_err());
+        assert!(validate_archive_inventory(&[file("Src/a", 1), file("Src/b", 1)], limits).is_ok());
+        let deep = format!("{}file", "a/".repeat(129));
+        assert!(validate_archive_inventory(&[file(&deep, 1)], limits).is_err());
+        assert!(validate_archive_inventory(&[file("café.txt", 1)], limits).is_err());
+        for alias in [
+            "foo.", "dir/bar ", "a/...", "NUL", "nul.txt", "CON", "prn.log", "COM1", "lpt9.txt",
+            "AUX", "CONIN$", "CONOUT$",
+        ] {
+            assert!(
+                validate_archive_inventory(&[file(alias, 1)], limits).is_err(),
+                "accepted nonportable archive member: {alias}"
+            );
+        }
+
         for kind in [
             ArchiveEntryKind::Symlink,
             ArchiveEntryKind::Hardlink,
