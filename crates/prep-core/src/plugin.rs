@@ -110,7 +110,7 @@ pub fn prepare_host_planning_request(
             capability: PluginCapability::HostPackageManager,
         });
     }
-    if !valid_host_identifier(&dependency.manager, b"+._-")
+    if !valid_host_identifier(&dependency.manager, b"+._-", true)
         || !valid_host_identifier(
             &dependency.package,
             if dependency.manager == "brew" {
@@ -120,11 +120,12 @@ pub fn prepare_host_planning_request(
             } else {
                 &b"+._-"[..]
             },
+            true,
         )
         || dependency
             .version
             .as_ref()
-            .is_some_and(|version| !valid_host_identifier(version, b"+._-:~"))
+            .is_some_and(|version| !valid_host_identifier(version, b"+._-:~", false))
     {
         return Err(PluginProbeError::Protocol(
             "invalid host dependency identifier".to_owned(),
@@ -133,11 +134,11 @@ pub fn prepare_host_planning_request(
     Ok(HostPlanningRequest::new(id, operation, dependency))
 }
 
-fn valid_host_identifier(value: &str, punctuation: &[u8]) -> bool {
+fn valid_host_identifier(value: &str, punctuation: &[u8], reject_traversal: bool) -> bool {
     !value.is_empty()
         && value.len() <= 256
         && value.as_bytes()[0].is_ascii_alphanumeric()
-        && !value.contains("..")
+        && (!reject_traversal || !value.contains(".."))
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || punctuation.contains(&byte))
@@ -841,7 +842,7 @@ mod tests {
         let debian = HostDependency {
             manager: "apt".into(),
             package: "libarchive-dev:amd64".into(),
-            version: Some("2:3.7.4-1~deb12u1".into()),
+            version: Some("2:3.7..4-1~deb12u1".into()),
         };
         assert!(
             prepare_host_planning_request(
