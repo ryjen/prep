@@ -110,12 +110,15 @@ pub fn prepare_host_planning_request(
             capability: PluginCapability::HostPackageManager,
         });
     }
-    if !valid_host_identifier(&dependency.manager)
-        || !valid_host_identifier(&dependency.package)
+    if !valid_host_identifier(&dependency.manager, b"+._-")
+        || !valid_host_identifier(
+            &dependency.package,
+            if dependency.manager == "brew" { b"+._-@" } else { b"+._-" },
+        )
         || dependency
             .version
             .as_ref()
-            .is_some_and(|version| !valid_host_identifier(version))
+            .is_some_and(|version| !valid_host_identifier(version, b"+._-:~"))
     {
         return Err(PluginProbeError::Protocol(
             "invalid host dependency identifier".to_owned(),
@@ -124,13 +127,14 @@ pub fn prepare_host_planning_request(
     Ok(HostPlanningRequest::new(id, operation, dependency))
 }
 
-fn valid_host_identifier(value: &str) -> bool {
+fn valid_host_identifier(value: &str, punctuation: &[u8]) -> bool {
     !value.is_empty()
         && value.len() <= 256
         && value.as_bytes()[0].is_ascii_alphanumeric()
+        && !value.contains("..")
         && value
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"+._-".contains(&byte))
+            .all(|byte| byte.is_ascii_alphanumeric() || punctuation.contains(&byte))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -813,6 +817,32 @@ mod tests {
                 capability: PluginCapability::HostPackageManager
             })
         ));
+        let brew = HostDependency {
+            manager: "brew".into(),
+            package: "postgresql@16".into(),
+            version: Some("16.4".into()),
+        };
+        assert!(prepare_host_planning_request(
+            &plugin,
+            &policy,
+            HostPlanningOperation::ProbeHostDependency,
+            brew,
+            "brew-1",
+        )
+        .is_ok());
+        let debian = HostDependency {
+            manager: "apt".into(),
+            package: "libarchive-dev".into(),
+            version: Some("2:3.7.4-1~deb12u1".into()),
+        };
+        assert!(prepare_host_planning_request(
+            &plugin,
+            &policy,
+            HostPlanningOperation::ProbeHostDependency,
+            debian,
+            "apt-1",
+        )
+        .is_ok());
         let malformed = HostDependency {
             package: "../bad".into(),
             ..dependency
