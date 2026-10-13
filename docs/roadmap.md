@@ -140,7 +140,7 @@ Deliverables:
 - [x] remove historical `cli`/`web` submodules from the active repository layout;
 - [ ] point archived/historical repositories to `ryjen/prep`;
 - [x] add migration/import guidance;
-- [ ] decide whether `prep-web` remains archived/private historical material or has an independent future.
+- [x] classify `prep-web` as a private, empty historical placeholder; defer any future UI until a stable CLI/API contract exists.
 
 Exit criterion: `ryjen/prep` is self-contained and no Prep 2 build/test path depends on historical repositories.
 
