@@ -4,7 +4,7 @@ use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,6 +35,7 @@ pub enum StoreError {
         message: String,
     },
     CrossFilesystem,
+    SourceTooLarge,
     Activation(String),
 }
 
@@ -55,6 +56,7 @@ impl fmt::Display for StoreError {
             Self::InvalidOutput { path, message } => {
                 write!(formatter, "invalid output {}: {message}", path.display())
             }
+            Self::SourceTooLarge => formatter.write_str("unverified source input exceeds size limit"),
             Self::CrossFilesystem => write!(
                 formatter,
                 "result staging and destination are on different filesystems"
@@ -474,6 +476,92 @@ impl UnverifiedSourceStage {
     #[must_use]
     pub fn untrusted_path(&self) -> &Path {
         &self.path
+    }
+
+    /// Stream an unverified archive into a private file with a strict byte cap.
+    /// An interrupted or oversized transfer never creates a completed blob.
+    /// This does not verify the SHA-256 declared by prep.lock.
+    pub fn spool_unverified_archive(
+        &self,
+        input: &mut impl Read,
+        maximum: u64,
+    ) -> Result<u64, StoreError> {
+        let _store_lock = self.store.lock_store()?;
+        verify_real_directory_within(
+            &self.store.source_staging_root,
+            &self.path,
+            "source staging transaction",
+        )?;
+        let completed = self.path.join("archive.blob");
+        if node_exists(&completed)? {
+            return Err(StoreError::InvalidPath(
+                "source archive is already staged".to_owned(),
+            ));
+        }
+        let incomplete = self.path.join("archive.part");
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&incomplete)
+            .map_err(|source| io_error("create private archive part", &incomplete, source))?;
+        drop(_store_lock);
+
+        let outcome = (|| {
+            let mut total = 0u64;
+            let mut buffer = [0u8; 8192];
+            loop {
+                let n = input.read(&mut buffer)
+                    .map_err(|source| io_error("read source archive", &incomplete, source))?;
+                if n == 0 {
+                    break;
+                }
+                total = total.checked_add(n as u64).ok_or(StoreError::SourceTooLarge)?;
+                if total > maximum {
+                    return Err(StoreError::SourceTooLarge);
+                }
+                file.write_all(&buffer[..n])
+                    .map_err(|source| io_error("write source archive", &incomplete, source))?;
+            }
+            file.sync_all()
+                .map_err(|source| io_error("sync source archive", &incomplete, source))?;
+            verify_open_file_identity(&incomplete, &file)?;
+            let _store_lock = self.store.lock_store()?;
+            verify_real_directory_within(
+                &self.store.source_staging_root,
+                &self.path,
+                "source staging transaction",
+            )?;
+            if node_exists(&completed)? {
+                return Err(StoreError::InvalidPath("source archive is already staged".to_owned()));
+            }
+            fs::rename(&incomplete, &completed)
+                .map_err(|source| io_error("complete unverified source archive", &completed, source))?;
+            Ok(total)
+        })();
+        if outcome.is_err() {
+            let _ = fs::remove_file(&incomplete);
+        }
+        outcome
+    }
+
+    /// Open completed staged bytes as **unverified** input. The caller must
+    /// independently match the full file against the immutable lock identity.
+    pub fn open_unverified_archive(&self) -> Result<File, StoreError> {
+        let _store_lock = self.store.lock_store()?;
+        verify_real_directory_within(
+            &self.store.source_staging_root,
+            &self.path,
+            "source staging transaction",
+        )?;
+        let path = self.path.join("archive.blob");
+        let file = File::open(&path)
+            .map_err(|source| io_error("open unverified source archive", &path, source))?;
+        verify_open_file_identity(&path, &file)?;
+        Ok(file)
     }
 
     #[cfg(test)]
@@ -1330,6 +1418,36 @@ mod tests {
 
     fn result_id(byte: &str) -> StoreResultId {
         StoreResultId::parse(format!("sha256:{}", byte.repeat(64))).expect("valid result id")
+    }
+
+    #[test]
+    fn unverified_archive_spool_is_bounded_and_not_a_build_result() {
+        let temp = TestDirectory::new("source-spool");
+        let store = Store::open(&temp.0.join("store")).expect("open store");
+        let stage = store.begin_unverified_source().expect("source stage");
+        let oversized = &mut std::io::Cursor::new(b"abcdef");
+        assert!(matches!(
+            stage.spool_unverified_archive(oversized, 5),
+            Err(StoreError::SourceTooLarge)
+        ));
+        assert!(stage.open_unverified_archive().is_err());
+        assert!(!stage.untrusted_path().join("archive.part").exists());
+
+        assert_eq!(
+            stage.spool_unverified_archive(&mut std::io::Cursor::new(b"abc"), 3)
+                .expect("spool within limit"),
+            3
+        );
+        let mut file = stage.open_unverified_archive().expect("completed unverified archive");
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).expect("read unverified bytes");
+        assert_eq!(bytes, b"abc");
+        assert!(stage.spool_unverified_archive(&mut std::io::Cursor::new(b"new"), 3).is_err());
+        assert!(store.get(&result_id("9")).expect("read result store").is_none());
+        let path = stage.untrusted_path().to_owned();
+        drop(file);
+        drop(stage);
+        assert!(!path.exists());
     }
 
     #[test]
