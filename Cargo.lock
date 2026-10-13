@@ -109,6 +109,7 @@ version = "0.1.0"
 dependencies = [
  "prep-manifest",
  "prep-protocol",
+ "prep-store",
  "serde",
  "serde_json",
  "sha2",
