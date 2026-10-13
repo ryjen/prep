@@ -10,6 +10,7 @@ pub enum SourceVerificationError {
     WrongKind,
     IdentityMismatch,
     TooLarge,
+    UnsafeEntryPath,
     Io(io::Error),
 }
 impl fmt::Display for SourceVerificationError {
@@ -19,6 +20,7 @@ impl fmt::Display for SourceVerificationError {
             Self::WrongKind => f.write_str("source kind differs from lock"),
             Self::IdentityMismatch => f.write_str("source integrity differs from lock"),
             Self::TooLarge => f.write_str("source exceeds verification limit"),
+            Self::UnsafeEntryPath => f.write_str("archive entry path is unsafe"),
             Self::Io(error) => write!(f, "source read failed: {error}"),
         }
     }
@@ -75,6 +77,27 @@ pub fn verify_archive_bytes(
     Ok(total)
 }
 
+
+/// Preflight an archive member name before any filesystem operation.
+/// Archive extractors must separately enforce symlink/hardlink and descriptor-based
+/// containment rules; this lexical check is necessary but not sufficient.
+pub fn validate_archive_entry_path(
+    name: &str,
+    maximum_length: usize,
+) -> Result<(), SourceVerificationError> {
+    if name.is_empty()
+        || name.len() > maximum_length
+        || name.starts_with('/')
+        || name.contains('\\')
+        || name.contains(':')
+        || name.bytes().any(|byte| byte == 0 || byte < 0x20 || byte == 0x7f)
+        || name.split('/').any(|component| component.is_empty() || component == "." || component == "..")
+    {
+        return Err(SourceVerificationError::UnsafeEntryPath);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,6 +115,22 @@ mod tests {
                 version: PackageVersion::parse("1.0.0").unwrap(),
             },
         }
+    }
+
+    #[test]
+    fn archive_entry_paths_reject_traversal_and_platform_ambiguity() {
+        for name in [
+            "", "/etc/passwd", "../outside", "inside/../outside", "./inside",
+            "inside//name", "C:/Windows/system.ini", "a\\b", "safe/.",
+            "safe/..", "line\nfeed", "nul\0byte",
+        ] {
+            assert!(matches!(
+                validate_archive_entry_path(name, 256),
+                Err(SourceVerificationError::UnsafeEntryPath)
+            ), "accepted unsafe path: {name:?}");
+        }
+        assert!(validate_archive_entry_path("src/main.rs", 256).is_ok());
+        assert!(validate_archive_entry_path("src/main.rs", 5).is_err());
     }
     #[test]
     fn archive_verification_is_bounded_and_fail_closed() {
