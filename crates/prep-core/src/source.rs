@@ -77,7 +77,6 @@ pub fn verify_archive_bytes(
     Ok(total)
 }
 
-
 /// Preflight an archive member name before any filesystem operation.
 /// Archive extractors must separately enforce symlink/hardlink and descriptor-based
 /// containment rules; this lexical check is necessary but not sufficient.
@@ -90,8 +89,12 @@ pub fn validate_archive_entry_path(
         || name.starts_with('/')
         || name.contains('\\')
         || name.contains(':')
-        || name.bytes().any(|byte| byte == 0 || byte < 0x20 || byte == 0x7f)
-        || name.split('/').any(|component| component.is_empty() || component == "." || component == "..")
+        || name
+            .bytes()
+            .any(|byte| byte == 0 || byte < 0x20 || byte == 0x7f)
+        || name
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
     {
         return Err(SourceVerificationError::UnsafeEntryPath);
     }
@@ -120,14 +123,26 @@ mod tests {
     #[test]
     fn archive_entry_paths_reject_traversal_and_platform_ambiguity() {
         for name in [
-            "", "/etc/passwd", "../outside", "inside/../outside", "./inside",
-            "inside//name", "C:/Windows/system.ini", "a\\b", "safe/.",
-            "safe/..", "line\nfeed", "nul\0byte",
+            "",
+            "/etc/passwd",
+            "../outside",
+            "inside/../outside",
+            "./inside",
+            "inside//name",
+            "C:/Windows/system.ini",
+            "a\\b",
+            "safe/.",
+            "safe/..",
+            "line\nfeed",
+            "nul\0byte",
         ] {
-            assert!(matches!(
-                validate_archive_entry_path(name, 256),
-                Err(SourceVerificationError::UnsafeEntryPath)
-            ), "accepted unsafe path: {name:?}");
+            assert!(
+                matches!(
+                    validate_archive_entry_path(name, 256),
+                    Err(SourceVerificationError::UnsafeEntryPath)
+                ),
+                "accepted unsafe path: {name:?}"
+            );
         }
         assert!(validate_archive_entry_path("src/main.rs", 256).is_ok());
         assert!(validate_archive_entry_path("src/main.rs", 5).is_err());
