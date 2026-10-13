@@ -114,7 +114,9 @@ pub fn prepare_host_planning_request(
         || !valid_host_identifier(
             &dependency.package,
             if dependency.manager == "brew" {
-                &b"+._-@"[..]
+                &b"+._-@/"[..]
+            } else if dependency.manager == "apt" {
+                &b"+._-:"[..]
             } else {
                 &b"+._-"[..]
             },
@@ -823,7 +825,7 @@ mod tests {
         ));
         let brew = HostDependency {
             manager: "brew".into(),
-            package: "postgresql@16".into(),
+            package: "homebrew/core/postgresql@16".into(),
             version: Some("16.4".into()),
         };
         assert!(prepare_host_planning_request(
@@ -836,7 +838,7 @@ mod tests {
         .is_ok());
         let debian = HostDependency {
             manager: "apt".into(),
-            package: "libarchive-dev".into(),
+            package: "libarchive-dev:amd64".into(),
             version: Some("2:3.7.4-1~deb12u1".into()),
         };
         assert!(prepare_host_planning_request(
