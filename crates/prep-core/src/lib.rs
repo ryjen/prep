@@ -7,6 +7,7 @@ mod identity;
 mod plugin;
 mod plugin_input;
 mod source;
+mod source_load;
 mod verified_ustar;
 
 pub use graph::{DependencyGraph, GraphError};
@@ -46,3 +47,5 @@ pub use archive_tar::inspect_ustar;
 pub use verified_ustar::{
     MAX_ARCHIVE_SNAPSHOT_BYTES, VerifiedUstarSnapshot, read_verified_ustar_snapshot,
 };
+
+pub use source_load::{SourceLoadError, load_cached_ustar, load_staged_ustar};
