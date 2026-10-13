@@ -27,7 +27,10 @@ impl std::error::Error for SourceVerificationError {}
 
 /// Compare independently observed checkout HEAD with the locked commit.
 /// This does not itself prove object integrity or filesystem containment.
-pub fn verify_git_head(source: &LockedSource, observed: &GitCommit) -> Result<(), SourceVerificationError> {
+pub fn verify_git_head(
+    source: &LockedSource,
+    observed: &GitCommit,
+) -> Result<(), SourceVerificationError> {
     match source {
         LockedSource::Git { commit, .. } if commit == observed => Ok(()),
         LockedSource::Git { .. } => Err(SourceVerificationError::IdentityMismatch),
@@ -52,10 +55,18 @@ pub fn verify_archive_bytes(
     let mut total = 0u64;
     let mut buffer = [0; 8192];
     loop {
-        let n = input.read(&mut buffer).map_err(SourceVerificationError::Io)?;
-        if n == 0 { break; }
-        total = total.checked_add(n as u64).ok_or(SourceVerificationError::TooLarge)?;
-        if total > maximum { return Err(SourceVerificationError::TooLarge); }
+        let n = input
+            .read(&mut buffer)
+            .map_err(SourceVerificationError::Io)?;
+        if n == 0 {
+            break;
+        }
+        total = total
+            .checked_add(n as u64)
+            .ok_or(SourceVerificationError::TooLarge)?;
+        if total > maximum {
+            return Err(SourceVerificationError::TooLarge);
+        }
         hash.update(&buffer[..n]);
     }
     if format!("{:x}", hash.finalize()) != expected.as_str() {
@@ -72,7 +83,10 @@ mod tests {
     fn archive() -> LockedSource {
         LockedSource::Archive {
             url: SourceUrl::parse("https://example.test/archive.tar").unwrap(),
-            sha256: Sha256Digest::parse("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad").unwrap(),
+            sha256: Sha256Digest::parse(
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            )
+            .unwrap(),
             provider: ProviderIdentity {
                 name: PluginName::parse("archive").unwrap(),
                 version: PackageVersion::parse("1.0.0").unwrap(),
@@ -82,8 +96,17 @@ mod tests {
     #[test]
     fn archive_verification_is_bounded_and_fail_closed() {
         let source = archive();
-        assert_eq!(verify_archive_bytes(&source, &mut Cursor::new(b"abc"), 3).unwrap(), 3);
-        assert!(matches!(verify_archive_bytes(&source, &mut Cursor::new(b"abd"), 3), Err(SourceVerificationError::IdentityMismatch)));
-        assert!(matches!(verify_archive_bytes(&source, &mut Cursor::new(b"abc"), 2), Err(SourceVerificationError::TooLarge)));
+        assert_eq!(
+            verify_archive_bytes(&source, &mut Cursor::new(b"abc"), 3).unwrap(),
+            3
+        );
+        assert!(matches!(
+            verify_archive_bytes(&source, &mut Cursor::new(b"abd"), 3),
+            Err(SourceVerificationError::IdentityMismatch)
+        ));
+        assert!(matches!(
+            verify_archive_bytes(&source, &mut Cursor::new(b"abc"), 2),
+            Err(SourceVerificationError::TooLarge)
+        ));
     }
 }
