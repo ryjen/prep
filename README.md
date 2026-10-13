@@ -6,7 +6,7 @@ The original Prep implementation proved the central idea: a compact core can own
 
 ## Status
 
-**Prep 2 implementation has started from the accepted design baseline.** The historical `cli` and `web` submodules remain in this repository as reference material during migration; they are not the target architecture or active implementation path.
+**Prep 2 is now developed as a self-contained monorepo in `ryjen/prep`.** The historical `cli` and `web` gitlinks have been retired from the active source tree; archived Prep 1 repositories remain reference material only.
 
 The implementation direction uses:
 
@@ -34,6 +34,7 @@ The implementation direction uses:
 - [`docs/adr/0006-transactional-publication-and-tool-identity.md`](docs/adr/0006-transactional-publication-and-tool-identity.md) — atomic publication and output-affecting tool identity
 - [`docs/roadmap.md`](docs/roadmap.md) — staged implementation plan
 - [`docs/development.md`](docs/development.md) — local quality and bootstrap commands
+- [`docs/migration/prep-1.md`](docs/migration/prep-1.md) — Prep 1 → Prep 2 repository and manifest migration guidance
 
 ## Design principles
 
@@ -51,4 +52,4 @@ The implementation direction uses:
 - `ryjen/prep-plugins` — original executable Bash plugins
 - `ryjen/prep-web` — historical web component
 
-These repositories remain useful as behavioral references and migration fixtures, but Prep 2 is being implemented from the new contracts rather than by translating the C++ implementation class-for-class.
+These repositories remain useful as behavioral references and migration fixtures, but they are not submodules, build inputs, or release dependencies of Prep 2. Prep 2 is implemented from the new contracts rather than by translating the C++ implementation class-for-class.

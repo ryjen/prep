@@ -43,9 +43,13 @@ prep/
 └── ...
 ```
 
-The existing `cli` and `web` submodules remain temporarily while the design/migration plan is being accepted. They should leave the active build graph once Prep 2 scaffolding exists and historical references are documented.
+The historical `cli` and `web` submodules were retained only during design/bootstrap. They were removed from the active repository layout once the Rust workspace, protocol, store, migration fixture, and CI scaffolding were self-contained.
 
 `ryjen/prep-plugins` is not imported wholesale. Individual useful plugin behaviors are reimplemented against protocol v1 with black-box fixtures where appropriate.
+
+## Implementation status
+
+As of 2026-10-12, `ryjen/prep` no longer requires the historical `cli` or `web` gitlinks. The canonical clone contains the active Rust workspace, protocol and security contracts, test support, fuzz targets, and migration fixtures. Historical repositories remain external references only.
 
 ## Future plugin distribution
 

@@ -136,11 +136,11 @@ Exit criterion: host package mutation is always attributable and policy-controll
 
 Deliverables:
 
-- document which Prep 1 behaviors are supported, changed, or intentionally removed;
-- remove historical `cli`/`web` submodules from the active repository layout;
-- point archived/historical repositories to `ryjen/prep`;
-- add migration/import guidance;
-- decide whether `prep-web` remains archived/private historical material or has an independent future.
+- [x] document the initial Prep 1 → Prep 2 behavior mapping and intentional trust-model breaks;
+- [x] remove historical `cli`/`web` submodules from the active repository layout;
+- [ ] point archived/historical repositories to `ryjen/prep`;
+- [x] add migration/import guidance;
+- [ ] decide whether `prep-web` remains archived/private historical material or has an independent future.
 
 Exit criterion: `ryjen/prep` is self-contained and no Prep 2 build/test path depends on historical repositories.
 
