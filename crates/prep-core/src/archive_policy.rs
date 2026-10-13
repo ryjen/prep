@@ -51,6 +51,9 @@ pub fn validate_archive_inventory(
     }
     let mut total = 0_u64;
     let mut paths = BTreeMap::new();
+    // A canonical parent ID plus case-folded component distinguishes path
+    // spellings without repeatedly allocating every full prefix.
+    let mut components: BTreeMap<(usize, String), (String, usize)> = BTreeMap::new();
     for entry in entries {
         validate_archive_entry_path(&entry.name, limits.max_path_bytes)?;
         // The v1 portable inventory admits only ASCII names; a later source
@@ -69,6 +72,28 @@ pub fn validate_archive_inventory(
             ArchiveEntryKind::RegularFile | ArchiveEntryKind::Directory
         ) {
             return Err(SourceVerificationError::UnsafeEntryPath);
+        }
+        // Require consistent original spelling for every case-equivalent
+        // component, including implicitly created ancestor directories.
+        // This rejects Src/a + src/b on case-sensitive *and* insensitive hosts.
+        let mut parent = 0usize;
+        let mut depth = 0usize;
+        for component in entry.name.split('/') {
+            depth += 1;
+            if depth > 128 {
+                return Err(SourceVerificationError::TooLarge);
+            }
+            let key = (parent, component.to_ascii_lowercase());
+            if let Some((spelling, id)) = components.get(&key) {
+                if spelling != component {
+                    return Err(SourceVerificationError::UnsafeEntryPath);
+                }
+                parent = *id;
+            } else {
+                let id = components.len() + 1;
+                components.insert(key, (component.to_owned(), id));
+                parent = id;
+            }
         }
         if paths
             .insert(entry.name.to_ascii_lowercase(), entry.kind)
@@ -153,6 +178,11 @@ mod tests {
             validate_archive_inventory(&[file("README", 1), file("readme", 1)], limits).is_err()
         );
         assert!(validate_archive_inventory(&[file("SRC", 1), file("src/a", 1)], limits).is_err());
+        assert!(validate_archive_inventory(&[file("Src/a", 1), file("src/b", 1)], limits).is_err());
+        assert!(validate_archive_inventory(&[file("A/x", 1), file("a/y", 1)], limits).is_err());
+        assert!(validate_archive_inventory(&[file("Src/a", 1), file("Src/b", 1)], limits).is_ok());
+        let deep = format!("{}file", "a/".repeat(129));
+        assert!(validate_archive_inventory(&[file(&deep, 1)], limits).is_err());
         assert!(validate_archive_inventory(&[file("café.txt", 1)], limits).is_err());
         for alias in [
             "foo.", "dir/bar ", "a/...", "NUL", "nul.txt", "CON", "prn.log", "COM1", "lpt9.txt",
