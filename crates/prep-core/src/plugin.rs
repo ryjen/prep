@@ -1,7 +1,8 @@
 use prep_protocol::{
-    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginCapability,
-    PluginOperation, ProbeBuildSystemRequest, ProbeBuildSystemResultFrame, ProtocolErrorCode,
-    ResultFrame, ResultFrameType, decode_frame, encode_frame,
+    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, HostDependency, HostPlanningOperation,
+    HostPlanningRequest, PROTOCOL_V1, PluginCapability, PluginDescriptor, PluginOperation,
+    ProbeBuildSystemRequest, ProbeBuildSystemResultFrame, ProtocolErrorCode, ResultFrame,
+    ResultFrameType, decode_frame, encode_frame,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -76,6 +77,71 @@ impl PluginAdmissionPolicy {
     pub fn allows(&self, capability: PluginCapability) -> bool {
         self.allowed_capabilities.contains(&capability)
     }
+}
+
+/// Prepare a host-provider request only after verifying the declared operation and capability.
+/// This only constructs data; no process, package-manager, or privileged command is executed.
+pub fn prepare_host_planning_request(
+    plugin: &PluginDescriptor,
+    policy: &PluginAdmissionPolicy,
+    operation: HostPlanningOperation,
+    dependency: HostDependency,
+    id: impl Into<String>,
+) -> Result<HostPlanningRequest, PluginProbeError> {
+    admit_capabilities(&plugin.capabilities, policy)?;
+    if !plugin
+        .operations
+        .contains(&PluginOperation::from(operation))
+    {
+        return Err(PluginProbeError::InvalidHandshake(
+            "host provider did not declare requested operation".to_owned(),
+        ));
+    }
+    if !plugin
+        .capabilities
+        .contains(&PluginCapability::HostPackageManager)
+    {
+        return Err(PluginProbeError::PolicyDenied {
+            capability: PluginCapability::HostPackageManager,
+        });
+    }
+    if !policy.allows(PluginCapability::HostPackageManager) {
+        return Err(PluginProbeError::PolicyDenied {
+            capability: PluginCapability::HostPackageManager,
+        });
+    }
+    if !valid_host_identifier(&dependency.manager, b"+._-", true)
+        || !valid_host_identifier(
+            &dependency.package,
+            if dependency.manager == "brew" {
+                &b"+._-@/"[..]
+            } else if dependency.manager == "apt" {
+                &b"+._-:"[..]
+            } else {
+                &b"+._-"[..]
+            },
+            true,
+        )
+        || dependency
+            .version
+            .as_ref()
+            .is_some_and(|version| !valid_host_identifier(version, b"+._-:~", false))
+    {
+        return Err(PluginProbeError::Protocol(
+            "invalid host dependency identifier".to_owned(),
+        ));
+    }
+    Ok(HostPlanningRequest::new(id, operation, dependency))
+}
+
+fn valid_host_identifier(value: &str, punctuation: &[u8], reject_traversal: bool) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && (!reject_traversal || !value.contains(".."))
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || punctuation.contains(&byte))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -696,6 +762,112 @@ mod tests {
         let policy = PluginAdmissionPolicy::allow([PluginCapability::Network]);
         admit_capabilities(&[PluginCapability::Network], &policy)
             .expect("explicitly allowed capability should be admitted");
+    }
+
+    #[test]
+    fn host_planning_requires_declared_operation_and_explicit_policy() {
+        let dependency = HostDependency {
+            manager: "apt".into(),
+            package: "cmake".into(),
+            version: None,
+        };
+        let plugin = PluginDescriptor {
+            name: "host-provider".into(),
+            version: "1".into(),
+            operations: vec![PluginOperation::ProbeHostDependency],
+            capabilities: vec![PluginCapability::HostPackageManager],
+        };
+        assert!(matches!(
+            prepare_host_planning_request(
+                &plugin,
+                &PluginAdmissionPolicy::deny_all(),
+                HostPlanningOperation::ProbeHostDependency,
+                dependency.clone(),
+                "1"
+            ),
+            Err(PluginProbeError::PolicyDenied {
+                capability: PluginCapability::HostPackageManager
+            })
+        ));
+        let policy = PluginAdmissionPolicy::allow([PluginCapability::HostPackageManager]);
+        assert!(
+            prepare_host_planning_request(
+                &plugin,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                dependency.clone(),
+                "1"
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            prepare_host_planning_request(
+                &plugin,
+                &policy,
+                HostPlanningOperation::PlanHostChange,
+                dependency.clone(),
+                "1"
+            ),
+            Err(PluginProbeError::InvalidHandshake(_))
+        ));
+        let mut undeclared = plugin.clone();
+        undeclared.capabilities.clear();
+        assert!(matches!(
+            prepare_host_planning_request(
+                &undeclared,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                dependency.clone(),
+                "1"
+            ),
+            Err(PluginProbeError::PolicyDenied {
+                capability: PluginCapability::HostPackageManager
+            })
+        ));
+        let brew = HostDependency {
+            manager: "brew".into(),
+            package: "homebrew/core/postgresql@16".into(),
+            version: Some("16.4".into()),
+        };
+        assert!(
+            prepare_host_planning_request(
+                &plugin,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                brew,
+                "brew-1",
+            )
+            .is_ok()
+        );
+        let debian = HostDependency {
+            manager: "apt".into(),
+            package: "libarchive-dev:amd64".into(),
+            version: Some("2:3.7..4-1~deb12u1".into()),
+        };
+        assert!(
+            prepare_host_planning_request(
+                &plugin,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                debian,
+                "apt-1",
+            )
+            .is_ok()
+        );
+        let malformed = HostDependency {
+            package: "../bad".into(),
+            ..dependency
+        };
+        assert!(matches!(
+            prepare_host_planning_request(
+                &plugin,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                malformed,
+                "1"
+            ),
+            Err(PluginProbeError::Protocol(_))
+        ));
     }
 
     #[test]
