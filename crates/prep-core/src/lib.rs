@@ -36,7 +36,10 @@ pub use archive_policy::{
 
 pub use git_tree::validate_git_tree_listing;
 
-pub use git_command::{isolated_git_command, prepare_locked_tree_inspection};
+pub use git_command::{
+    isolated_git_command, parse_exact_git_ref, prepare_exact_git_ref_resolution,
+    prepare_locked_tree_inspection,
+};
 
 pub use archive_tar::inspect_ustar;
 
