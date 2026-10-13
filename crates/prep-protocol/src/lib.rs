@@ -271,27 +271,324 @@ impl BuilderRequestFrame {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ProtocolErrorCode {
+    #[serde(rename = "invalid_request")]
+    InvalidRequest,
+    #[serde(rename = "unsupported_operation")]
+    UnsupportedOperation,
+    #[serde(rename = "unsupported_build_system")]
+    UnsupportedBuildSystem,
+    #[serde(rename = "not_found")]
+    NotFound,
+    #[serde(rename = "unavailable")]
+    Unavailable,
+    #[serde(rename = "build_failed")]
+    BuildFailed,
+    #[serde(rename = "test_failed")]
+    TestFailed,
+    #[serde(rename = "install_failed")]
+    InstallFailed,
+    #[serde(rename = "policy_denied")]
+    PolicyDenied,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "timeout")]
+    Timeout,
+    #[serde(rename = "internal")]
+    Internal,
+}
+
+impl fmt::Display for ProtocolErrorCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidRequest => "invalid_request",
+            Self::UnsupportedOperation => "unsupported_operation",
+            Self::UnsupportedBuildSystem => "unsupported_build_system",
+            Self::NotFound => "not_found",
+            Self::Unavailable => "unavailable",
+            Self::BuildFailed => "build_failed",
+            Self::TestFailed => "test_failed",
+            Self::InstallFailed => "install_failed",
+            Self::PolicyDenied => "policy_denied",
+            Self::Cancelled => "cancelled",
+            Self::Timeout => "timeout",
+            Self::Internal => "internal",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ProtocolErrorBody {
-    pub code: String,
+    pub code: ProtocolErrorCode,
     pub message: String,
     #[serde(default)]
     pub retryable: bool,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ResultFrameType {
+    #[serde(rename = "result")]
+    Result,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultStatus {
+    Ok,
+    Error,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ResultFrame<T> {
+    Ok {
+        protocol: String,
+        id: String,
+        #[serde(rename = "type")]
+        frame_type: ResultFrameType,
+        value: T,
+    },
+    Error {
+        protocol: String,
+        id: String,
+        #[serde(rename = "type")]
+        frame_type: ResultFrameType,
+        error: ProtocolErrorBody,
+    },
+}
+
+impl<T> ResultFrame<T> {
+    #[must_use]
+    pub fn ok(id: impl Into<String>, value: T) -> Self {
+        Self::Ok {
+            protocol: PROTOCOL_V1.to_owned(),
+            id: id.into(),
+            frame_type: ResultFrameType::Result,
+            value,
+        }
+    }
+
+    #[must_use]
+    pub fn error(id: impl Into<String>, error: ProtocolErrorBody) -> Self {
+        Self::Error {
+            protocol: PROTOCOL_V1.to_owned(),
+            id: id.into(),
+            frame_type: ResultFrameType::Result,
+            error,
+        }
+    }
+
+    #[must_use]
+    pub fn protocol(&self) -> &str {
+        match self {
+            Self::Ok { protocol, .. } | Self::Error { protocol, .. } => protocol,
+        }
+    }
+
+    #[must_use]
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Ok { id, .. } | Self::Error { id, .. } => id,
+        }
+    }
+
+    #[must_use]
+    pub fn frame_type(&self) -> ResultFrameType {
+        match self {
+            Self::Ok { frame_type, .. } | Self::Error { frame_type, .. } => *frame_type,
+        }
+    }
+
+    #[must_use]
+    pub fn status(&self) -> ResultStatus {
+        match self {
+            Self::Ok { .. } => ResultStatus::Ok,
+            Self::Error { .. } => ResultStatus::Error,
+        }
+    }
+
+    #[must_use]
+    pub fn value(&self) -> Option<&T> {
+        match self {
+            Self::Ok { value, .. } => Some(value),
+            Self::Error { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn error_body(&self) -> Option<&ProtocolErrorBody> {
+        match self {
+            Self::Ok { .. } => None,
+            Self::Error { error, .. } => Some(error),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ResultFrame {
+pub struct ProbeBuildSystemResult {
+    pub supported: bool,
+}
+
+pub type ProbeBuildSystemResultFrame = ResultFrame<ProbeBuildSystemResult>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ConfigureResult {
+    pub configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct BuildResult {
+    pub built: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TestResult {
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct InstallToStagingResult {
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EventFrameType {
+    #[serde(rename = "event")]
+    Event,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PluginEventKind {
+    #[serde(rename = "progress")]
+    Progress,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgressEventError {
+    message: &'static str,
+}
+
+impl fmt::Display for ProgressEventError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.message)
+    }
+}
+
+impl Error for ProgressEventError {}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProgressEventFrame {
     pub protocol: String,
     pub id: String,
     #[serde(rename = "type")]
-    pub frame_type: String,
-    pub status: String,
+    pub frame_type: EventFrameType,
+    pub event: PluginEventKind,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawProgressEventFrame {
+    protocol: String,
+    id: String,
+    #[serde(rename = "type")]
+    frame_type: EventFrameType,
+    event: PluginEventKind,
+    message: String,
     #[serde(default)]
-    pub value: Option<Value>,
+    completed: Option<u64>,
     #[serde(default)]
-    pub error: Option<ProtocolErrorBody>,
+    total: Option<u64>,
+}
+
+impl ProgressEventFrame {
+    pub fn new(
+        id: impl Into<String>,
+        message: impl Into<String>,
+        progress: Option<(u64, u64)>,
+    ) -> Result<Self, ProgressEventError> {
+        let (completed, total) = progress.map_or((None, None), |(completed, total)| {
+            (Some(completed), Some(total))
+        });
+        Self::from_parts(
+            PROTOCOL_V1.to_owned(),
+            id.into(),
+            EventFrameType::Event,
+            PluginEventKind::Progress,
+            message.into(),
+            completed,
+            total,
+        )
+    }
+
+    fn from_parts(
+        protocol: String,
+        id: String,
+        frame_type: EventFrameType,
+        event: PluginEventKind,
+        message: String,
+        completed: Option<u64>,
+        total: Option<u64>,
+    ) -> Result<Self, ProgressEventError> {
+        match (completed, total) {
+            (None, None) => {}
+            (Some(completed), Some(total)) if total > 0 && completed <= total => {}
+            (Some(_), Some(0)) => {
+                return Err(ProgressEventError {
+                    message: "progress total must be greater than zero",
+                });
+            }
+            (Some(_), Some(_)) => {
+                return Err(ProgressEventError {
+                    message: "progress completed value exceeds total",
+                });
+            }
+            _ => {
+                return Err(ProgressEventError {
+                    message: "progress completed and total must be provided together",
+                });
+            }
+        }
+
+        Ok(Self {
+            protocol,
+            id,
+            frame_type,
+            event,
+            message,
+            completed,
+            total,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for ProgressEventFrame {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawProgressEventFrame::deserialize(deserializer)?;
+        Self::from_parts(
+            raw.protocol,
+            raw.id,
+            raw.frame_type,
+            raw.event,
+            raw.message,
+            raw.completed,
+            raw.total,
+        )
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 #[cfg(test)]
@@ -410,6 +707,44 @@ mod tests {
         let input = r#"{"protocol":"prep.plugin/1","id":"hello","type":"hello_result","plugin":{"name":"x","version":"1","operations":["probe_build_system"],"capabilities":["filesystem.root"]}}"#;
         let error = decode_frame::<HelloResultFrame>(input, DEFAULT_MAX_FRAME_BYTES)
             .expect_err("unknown capability should be rejected");
+        assert!(matches!(error, CodecError::InvalidJson(_)));
+    }
+
+    #[test]
+    fn typed_result_frame_rejects_unknown_status_and_error_code() {
+        let unknown_status = r#"{"protocol":"prep.plugin/1","id":"42","type":"result","status":"maybe","value":{"supported":true}}"#;
+        let error =
+            decode_frame::<ProbeBuildSystemResultFrame>(unknown_status, DEFAULT_MAX_FRAME_BYTES)
+                .expect_err("unknown result status should fail");
+        assert!(matches!(error, CodecError::InvalidJson(_)));
+
+        let unknown_code = r#"{"protocol":"prep.plugin/1","id":"42","type":"result","status":"error","error":{"code":"shell_failed","message":"nope","retryable":false}}"#;
+        let error =
+            decode_frame::<ProbeBuildSystemResultFrame>(unknown_code, DEFAULT_MAX_FRAME_BYTES)
+                .expect_err("unknown error code should fail");
+        assert!(matches!(error, CodecError::InvalidJson(_)));
+    }
+
+    #[test]
+    fn typed_result_frame_rejects_mixed_success_and_error_payloads() {
+        let input = r#"{"protocol":"prep.plugin/1","id":"42","type":"result","status":"ok","value":{"supported":true},"error":{"code":"internal","message":"mixed"}}"#;
+        let error = decode_frame::<ProbeBuildSystemResultFrame>(input, DEFAULT_MAX_FRAME_BYTES)
+            .expect_err("mixed result payload should fail");
+        assert!(matches!(error, CodecError::InvalidJson(_)));
+    }
+
+    #[test]
+    fn progress_event_round_trips_and_rejects_invalid_progress() {
+        let frame = ProgressEventFrame::new("42", "building", Some((20, 100)))
+            .expect("valid progress event");
+        let encoded = encode_frame(&frame).expect("progress event should serialize");
+        let decoded: ProgressEventFrame =
+            decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).expect("progress event should parse");
+        assert_eq!(decoded, frame);
+
+        let input = r#"{"protocol":"prep.plugin/1","id":"42","type":"event","event":"progress","message":"bad","completed":101,"total":100}"#;
+        let error = decode_frame::<ProgressEventFrame>(input, DEFAULT_MAX_FRAME_BYTES)
+            .expect_err("completed > total should fail");
         assert!(matches!(error, CodecError::InvalidJson(_)));
     }
 
