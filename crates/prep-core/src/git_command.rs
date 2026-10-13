@@ -85,16 +85,17 @@ pub fn parse_exact_git_ref(output: &[u8], requested_ref: &str) -> std::io::Resul
             .ok_or(std::io::ErrorKind::InvalidData)?;
         let commit = GitCommit::parse(object)
             .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidData))?;
-        if reference == requested_ref && direct.replace(commit).is_none() {
-            continue;
+        if reference == requested_ref {
+            if direct.replace(commit).is_some() {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+        } else if requested_ref.starts_with("refs/tags/") && reference == peeled_ref {
+            if peeled.replace(commit).is_some() {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+        } else {
+            return Err(std::io::ErrorKind::InvalidData.into());
         }
-        if requested_ref.starts_with("refs/tags/")
-            && reference == peeled_ref
-            && peeled.replace(commit).is_none()
-        {
-            continue;
-        }
-        return Err(std::io::ErrorKind::InvalidData.into());
     }
     if requested_ref.starts_with("refs/heads/") && peeled.is_some() {
         return Err(std::io::ErrorKind::InvalidData.into());
