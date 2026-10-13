@@ -23,16 +23,25 @@ pub fn validate_git_tree_listing(
         if count > max_entries {
             return Err(SourceVerificationError::TooLarge);
         }
-        let (header, raw_path) = record.split_once_byte(b'\t').ok_or(SourceVerificationError::UnsafeEntryPath)?;
-        let path = std::str::from_utf8(raw_path).map_err(|_| SourceVerificationError::UnsafeEntryPath)?;
+        let (header, raw_path) = record
+            .split_once_byte(b'\t')
+            .ok_or(SourceVerificationError::UnsafeEntryPath)?;
+        let path =
+            std::str::from_utf8(raw_path).map_err(|_| SourceVerificationError::UnsafeEntryPath)?;
         validate_archive_entry_path(path, max_path_bytes)?;
         if !entries.insert(path) {
             return Err(SourceVerificationError::UnsafeEntryPath);
         }
         let mut parts = header.split(|byte| *byte == b' ');
-        let mode = parts.next().ok_or(SourceVerificationError::UnsafeEntryPath)?;
-        let kind = parts.next().ok_or(SourceVerificationError::UnsafeEntryPath)?;
-        let object_id = parts.next().ok_or(SourceVerificationError::UnsafeEntryPath)?;
+        let mode = parts
+            .next()
+            .ok_or(SourceVerificationError::UnsafeEntryPath)?;
+        let kind = parts
+            .next()
+            .ok_or(SourceVerificationError::UnsafeEntryPath)?;
+        let object_id = parts
+            .next()
+            .ok_or(SourceVerificationError::UnsafeEntryPath)?;
         if parts.next().is_some() || !matches!(mode, b"100644" | b"100755") || kind != b"blob" {
             // Reject gitlinks (160000), symlinks (120000), and unknown modes.
             return Err(SourceVerificationError::UnsafeEntryPath);
@@ -70,7 +79,10 @@ mod tests {
     #[test]
     fn rejects_gitlink_symlink_traversal_and_bad_object_id() {
         let id = "a".repeat(40);
-        assert_eq!(validate_git_tree_listing(&entry("100644", "blob", &id, "src/main.c"), 5, 256).unwrap(), 1);
+        assert_eq!(
+            validate_git_tree_listing(&entry("100644", "blob", &id, "src/main.c"), 5, 256).unwrap(),
+            1
+        );
         for (mode, kind, path) in [
             ("160000", "commit", "lib"),
             ("120000", "blob", "link"),
@@ -81,7 +93,9 @@ mod tests {
         ] {
             assert!(validate_git_tree_listing(&entry(mode, kind, &id, path), 5, 256).is_err());
         }
-        assert!(validate_git_tree_listing(&entry("100644", "blob", "not-a-sha", "x"), 5, 256).is_err());
+        assert!(
+            validate_git_tree_listing(&entry("100644", "blob", "not-a-sha", "x"), 5, 256).is_err()
+        );
     }
 
     #[test]
