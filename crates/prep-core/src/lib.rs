@@ -7,6 +7,7 @@ mod identity;
 mod plugin;
 mod plugin_input;
 mod source;
+mod verified_ustar;
 
 pub use graph::{DependencyGraph, GraphError};
 pub use identity::{
@@ -38,3 +39,7 @@ pub use git_tree::validate_git_tree_listing;
 pub use git_command::{isolated_git_command, prepare_locked_tree_inspection};
 
 pub use archive_tar::inspect_ustar;
+
+pub use verified_ustar::{
+    MAX_ARCHIVE_SNAPSHOT_BYTES, VerifiedUstarSnapshot, read_verified_ustar_snapshot,
+};
