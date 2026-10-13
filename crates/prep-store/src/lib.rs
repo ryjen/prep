@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
@@ -14,6 +15,7 @@ use std::os::unix::fs::MetadataExt;
 
 const RESULT_SCHEMA_V1: &str = "prep.result/1";
 const RESULT_RETENTION_PINNED: &str = "pinned";
+const MAX_CACHE_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 static TRANSACTION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug)]
@@ -36,6 +38,9 @@ pub enum StoreError {
     },
     CrossFilesystem,
     SourceTooLarge,
+    CorruptSource {
+        path: PathBuf,
+    },
     Activation(String),
 }
 
@@ -58,6 +63,9 @@ impl fmt::Display for StoreError {
             }
             Self::SourceTooLarge => {
                 formatter.write_str("unverified source input exceeds size limit")
+            }
+            Self::CorruptSource { path } => {
+                write!(formatter, "source digest mismatch: {}", path.display())
             }
             Self::CrossFilesystem => write!(
                 formatter,
@@ -177,6 +185,7 @@ pub struct Store {
     root: PathBuf,
     staging_root: PathBuf,
     source_staging_root: PathBuf,
+    source_cache_root: PathBuf,
     lock_root: PathBuf,
     results_sha256_root: PathBuf,
     store_lock_path: PathBuf,
@@ -192,6 +201,8 @@ impl Store {
 
         let staging_root = ensure_child_directory(&root, ".staging")?;
         let source_staging_root = ensure_child_directory(&root, ".source-staging")?;
+        let sources = ensure_child_directory(&root, "sources")?;
+        let source_cache_root = ensure_child_directory(&sources, "sha256")?;
         let lock_root = ensure_child_directory(&root, ".locks")?;
         let results_root = ensure_child_directory(&root, "results")?;
         let results_sha256_root = ensure_child_directory(&results_root, "sha256")?;
@@ -202,6 +213,7 @@ impl Store {
             root,
             staging_root,
             source_staging_root,
+            source_cache_root,
             lock_root,
             results_sha256_root,
             store_lock_path,
@@ -325,6 +337,118 @@ impl Store {
         ))
     }
 
+    /// Read a previously cached source archive into independently digest-verified,
+    /// immutable bytes. Returning bytes (not a path or descriptor) protects callers
+    /// against cache mutation after the integrity check, including offline use.
+    /// This verifies the blob digest, NOT its format or suitability for extraction.
+    pub fn read_cached_source_blob(
+        &self,
+        expected_sha256: &str,
+        max_bytes: u64,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        let digest = canonical_source_sha256(expected_sha256)?;
+        let _store_lock = self.lock_store()?;
+        self.read_cached_source_blob_locked(&digest, max_bytes)
+    }
+
+    fn read_cached_source_blob_locked(
+        &self,
+        digest: &str,
+        max_bytes: u64,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        let path = self.source_cache_root.join(digest);
+        verify_real_directory_within(&self.root, &self.source_cache_root, "source cache root")?;
+        if !node_exists(&path)? {
+            return Ok(None);
+        }
+        let mut file = File::open(&path)
+            .map_err(|source| io_error("open cached source blob", &path, source))?;
+        verify_open_file_identity(&path, &file)?;
+        let bytes = read_bounded_source_bytes(&mut file, max_bytes)?;
+        if format!("{:x}", Sha256::digest(&bytes)) != digest {
+            return Err(StoreError::CorruptSource { path });
+        }
+        Ok(Some(bytes))
+    }
+
+    /// Cache exactly the bytes copied from a leased, unverified source stage.
+    /// Verification is against the requested SHA-256 of the *copied* bytes,
+    /// never a mutable path checked before the copy. Cache is still only a blob,
+    /// not a source tree or permission to invoke builders.
+    pub fn cache_source_blob(
+        &self,
+        stage: &UnverifiedSourceStage,
+        expected_sha256: &str,
+        max_bytes: u64,
+    ) -> Result<(), StoreError> {
+        let digest = canonical_source_sha256(expected_sha256)?;
+        if stage.store.root != self.root {
+            return Err(StoreError::InvalidPath(
+                "source stage belongs to a different store".to_owned(),
+            ));
+        }
+        let mut staged = stage.open_unverified_archive()?;
+        let bytes = read_bounded_source_bytes(&mut staged, max_bytes)?;
+        if format!("{:x}", Sha256::digest(&bytes)) != digest {
+            return Err(StoreError::CorruptSource {
+                path: stage.path.join("archive.blob"),
+            });
+        }
+
+        let _store_lock = self.lock_store()?;
+        verify_real_directory_within(&self.root, &self.source_cache_root, "source cache root")?;
+        verify_real_directory_within(
+            &self.source_staging_root,
+            &stage.path,
+            "leased source stage",
+        )?;
+        if self
+            .read_cached_source_blob_locked(&digest, max_bytes)?
+            .is_some()
+        {
+            return Ok(());
+        }
+        let part = stage.path.join("cache.part");
+        let destination = self.source_cache_root.join(&digest);
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options
+            .open(&part)
+            .map_err(|source| io_error("create source cache part", &part, source))?;
+        let write_result = (|| {
+            file.write_all(&bytes)
+                .map_err(|source| io_error("write source cache part", &part, source))?;
+            file.sync_all()
+                .map_err(|source| io_error("sync source cache part", &part, source))?;
+            verify_open_file_identity(&part, &file)?;
+            match fs::hard_link(&part, &destination) {
+                Ok(()) => Ok(()),
+                Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {
+                    self.read_cached_source_blob_locked(&digest, max_bytes)?
+                        .ok_or(StoreError::CorruptSource {
+                            path: destination.clone(),
+                        })?;
+                    Ok(())
+                }
+                Err(source) => Err(io_error(
+                    "publish source blob without overwrite",
+                    &destination,
+                    source,
+                )),
+            }
+        })();
+        let cleanup = fs::remove_file(&part)
+            .map_err(|source| io_error("remove source cache part", &part, source));
+        write_result?;
+        cleanup?;
+        Ok(())
+    }
+
     pub fn get(&self, id: &StoreResultId) -> Result<Option<PublishedResult>, StoreError> {
         let _store_lock = self.lock_store()?;
         let path = self.result_path(id);
@@ -445,6 +569,7 @@ impl Store {
         require_real_directory(&self.root, "store root")?;
         verify_real_directory_within(&self.root, &self.staging_root, "staging root")?;
         verify_real_directory_within(&self.root, &self.source_staging_root, "source staging root")?;
+        verify_real_directory_within(&self.root, &self.source_cache_root, "source cache root")?;
         verify_real_directory_within(&self.root, &self.lock_root, "lock root")?;
         verify_real_directory_within(&self.root, &self.results_sha256_root, "result root")?;
         Ok(())
@@ -1381,6 +1506,33 @@ fn ensure_same_filesystem(_left: &Path, _right: &Path) -> Result<(), StoreError>
     Err(StoreError::CrossFilesystem)
 }
 
+fn canonical_source_sha256(value: &str) -> Result<String, StoreError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(StoreError::InvalidResultId(
+            "source cache digest must contain exactly 64 hexadecimal characters".to_owned(),
+        ));
+    }
+    Ok(value.to_ascii_lowercase())
+}
+
+fn read_bounded_source_bytes(file: &mut impl Read, maximum: u64) -> Result<Vec<u8>, StoreError> {
+    if maximum > MAX_CACHE_ARCHIVE_BYTES {
+        return Err(StoreError::SourceTooLarge);
+    }
+    let mut bytes = Vec::new();
+    file.take(maximum + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|source| StoreError::Io {
+            operation: "read bounded source bytes",
+            path: PathBuf::from("<source file>"),
+            source,
+        })?;
+    if bytes.len() as u64 > maximum {
+        return Err(StoreError::SourceTooLarge);
+    }
+    Ok(bytes)
+}
+
 fn transaction_id() -> String {
     let counter = TRANSACTION_COUNTER.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
@@ -1520,6 +1672,55 @@ mod tests {
         drop(file);
         drop(stage);
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn source_blob_cache_is_content_addressed_and_offline_reverified() {
+        let temp = TestDirectory::new("verified-source-cache");
+        let store = Store::open(&temp.0.join("store")).expect("store");
+        let stage = store.begin_unverified_source().expect("stage");
+        stage
+            .spool_unverified_archive(&mut std::io::Cursor::new(b"abc"), 3)
+            .expect("spool");
+        let good = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        let wrong = "0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(matches!(
+            store.cache_source_blob(&stage, wrong, 3),
+            Err(StoreError::CorruptSource { .. })
+        ));
+        assert!(store.read_cached_source_blob(good, 3).unwrap().is_none());
+        store.cache_source_blob(&stage, good, 3).expect("cache");
+        drop(stage);
+        assert_eq!(
+            store.read_cached_source_blob(good, 3).unwrap().unwrap(),
+            b"abc"
+        );
+        assert!(matches!(
+            store.read_cached_source_blob(good, 2),
+            Err(StoreError::SourceTooLarge)
+        ));
+        assert!(store.get(&result_id("9")).unwrap().is_none());
+        let path = store.root().join("sources/sha256").join(good);
+        fs::write(&path, b"tampered").expect("simulate corruption");
+        assert!(matches!(
+            store.read_cached_source_blob(good, 10),
+            Err(StoreError::CorruptSource { .. })
+        ));
+    }
+
+    #[test]
+    fn cache_rejects_invalid_source_digest_and_foreign_stage() {
+        let temp1 = TestDirectory::new("source-cache-origin");
+        let temp2 = TestDirectory::new("source-cache-other");
+        let first = Store::open(&temp1.0.join("store")).unwrap();
+        let second = Store::open(&temp2.0.join("store")).unwrap();
+        let stage = first.begin_unverified_source().unwrap();
+        stage
+            .spool_unverified_archive(&mut std::io::Cursor::new(b"abc"), 3)
+            .unwrap();
+        let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert!(second.cache_source_blob(&stage, digest, 3).is_err());
+        assert!(first.read_cached_source_blob("not-a-digest", 3).is_err());
     }
 
     #[test]
