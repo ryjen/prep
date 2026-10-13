@@ -1,8 +1,8 @@
 use prep_protocol::{
-    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginCapability,
-    PluginOperation, ProbeBuildSystemRequest, ProbeBuildSystemResultFrame, ProtocolErrorCode,
-    ResultFrame, ResultFrameType, HostDependency, HostPlanningOperation, HostPlanningRequest,
-    PluginDescriptor, decode_frame, encode_frame,
+    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, HostDependency, HostPlanningOperation,
+    HostPlanningRequest, PROTOCOL_V1, PluginCapability, PluginDescriptor, PluginOperation,
+    ProbeBuildSystemRequest, ProbeBuildSystemResultFrame, ProtocolErrorCode, ResultFrame,
+    ResultFrameType, decode_frame, encode_frame,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -89,12 +89,18 @@ pub fn prepare_host_planning_request(
     id: impl Into<String>,
 ) -> Result<HostPlanningRequest, PluginProbeError> {
     admit_capabilities(&plugin.capabilities, policy)?;
-    if !plugin.operations.contains(&PluginOperation::from(operation)) {
+    if !plugin
+        .operations
+        .contains(&PluginOperation::from(operation))
+    {
         return Err(PluginProbeError::InvalidHandshake(
             "host provider did not declare requested operation".to_owned(),
         ));
     }
-    if !plugin.capabilities.contains(&PluginCapability::HostPackageManager) {
+    if !plugin
+        .capabilities
+        .contains(&PluginCapability::HostPackageManager)
+    {
         return Err(PluginProbeError::PolicyDenied {
             capability: PluginCapability::HostPackageManager,
         });
@@ -106,7 +112,10 @@ pub fn prepare_host_planning_request(
     }
     if !valid_host_identifier(&dependency.manager)
         || !valid_host_identifier(&dependency.package)
-        || dependency.version.as_ref().is_some_and(|version| !valid_host_identifier(version))
+        || dependency
+            .version
+            .as_ref()
+            .is_some_and(|version| !valid_host_identifier(version))
     {
         return Err(PluginProbeError::Protocol(
             "invalid host dependency identifier".to_owned(),
@@ -744,7 +753,6 @@ mod tests {
             .expect("explicitly allowed capability should be admitted");
     }
 
-
     #[test]
     fn host_planning_requires_declared_operation_and_explicit_policy() {
         let dependency = HostDependency {
@@ -760,18 +768,34 @@ mod tests {
         };
         assert!(matches!(
             prepare_host_planning_request(
-                &plugin, &PluginAdmissionPolicy::deny_all(),
-                HostPlanningOperation::ProbeHostDependency, dependency.clone(), "1"
+                &plugin,
+                &PluginAdmissionPolicy::deny_all(),
+                HostPlanningOperation::ProbeHostDependency,
+                dependency.clone(),
+                "1"
             ),
-            Err(PluginProbeError::PolicyDenied { capability: PluginCapability::HostPackageManager })
+            Err(PluginProbeError::PolicyDenied {
+                capability: PluginCapability::HostPackageManager
+            })
         ));
         let policy = PluginAdmissionPolicy::allow([PluginCapability::HostPackageManager]);
-        assert!(prepare_host_planning_request(
-            &plugin, &policy, HostPlanningOperation::ProbeHostDependency, dependency.clone(), "1"
-        ).is_ok());
+        assert!(
+            prepare_host_planning_request(
+                &plugin,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                dependency.clone(),
+                "1"
+            )
+            .is_ok()
+        );
         assert!(matches!(
             prepare_host_planning_request(
-                &plugin, &policy, HostPlanningOperation::PlanHostChange, dependency.clone(), "1"
+                &plugin,
+                &policy,
+                HostPlanningOperation::PlanHostChange,
+                dependency.clone(),
+                "1"
             ),
             Err(PluginProbeError::InvalidHandshake(_))
         ));
@@ -779,14 +803,27 @@ mod tests {
         undeclared.capabilities.clear();
         assert!(matches!(
             prepare_host_planning_request(
-                &undeclared, &policy, HostPlanningOperation::ProbeHostDependency, dependency.clone(), "1"
+                &undeclared,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                dependency.clone(),
+                "1"
             ),
-            Err(PluginProbeError::PolicyDenied { capability: PluginCapability::HostPackageManager })
+            Err(PluginProbeError::PolicyDenied {
+                capability: PluginCapability::HostPackageManager
+            })
         ));
-        let malformed = HostDependency { package: "../bad".into(), ..dependency };
+        let malformed = HostDependency {
+            package: "../bad".into(),
+            ..dependency
+        };
         assert!(matches!(
             prepare_host_planning_request(
-                &plugin, &policy, HostPlanningOperation::ProbeHostDependency, malformed, "1"
+                &plugin,
+                &policy,
+                HostPlanningOperation::ProbeHostDependency,
+                malformed,
+                "1"
             ),
             Err(PluginProbeError::Protocol(_))
         ));
