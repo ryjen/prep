@@ -591,9 +591,133 @@ impl<'de> Deserialize<'de> for ProgressEventFrame {
     }
 }
 
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum HostPlanningOperation {
+    #[serde(rename = "probe_host_dependency")]
+    ProbeHostDependency,
+    #[serde(rename = "plan_host_change")]
+    PlanHostChange,
+}
+
+impl From<HostPlanningOperation> for PluginOperation {
+    fn from(operation: HostPlanningOperation) -> Self {
+        match operation {
+            HostPlanningOperation::ProbeHostDependency => Self::ProbeHostDependency,
+            HostPlanningOperation::PlanHostChange => Self::PlanHostChange,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostDependency {
+    pub manager: String,
+    pub package: String,
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostPlanningRequest {
+    pub protocol: String,
+    pub id: String,
+    #[serde(rename = "type")]
+    pub operation: HostPlanningOperation,
+    pub dependency: HostDependency,
+}
+
+impl HostPlanningRequest {
+    #[must_use]
+    pub fn new(id: impl Into<String>, operation: HostPlanningOperation, dependency: HostDependency) -> Self {
+        Self {
+            protocol: PROTOCOL_V1.to_owned(),
+            id: id.into(),
+            operation,
+            dependency,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostProbeResult {
+    pub present: bool,
+    #[serde(default)]
+    pub installed_version: Option<String>,
+}
+
+pub type HostProbeResultFrame = ResultFrame<HostProbeResult>;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum HostChangeKind {
+    #[serde(rename = "install")]
+    Install,
+    #[serde(rename = "upgrade")]
+    Upgrade,
+    #[serde(rename = "remove")]
+    Remove,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct HostChangePlan {
+    pub provider: String,
+    pub dependency: HostDependency,
+    pub change: HostChangeKind,
+    pub requires_privilege: bool,
+    pub summary: String,
+}
+
+pub type HostChangePlanResultFrame = ResultFrame<HostChangePlan>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn host_planning_round_trips_without_executable_apply_operation() {
+        let dependency = HostDependency {
+            manager: "apt".into(),
+            package: "libarchive-dev".into(),
+            version: Some("1.0".into()),
+        };
+        let request = HostPlanningRequest::new(
+            "plan-1",
+            HostPlanningOperation::PlanHostChange,
+            dependency.clone(),
+        );
+        let encoded = encode_frame(&request).unwrap();
+        let decoded: HostPlanningRequest = decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).unwrap();
+        assert_eq!(decoded, request);
+        let plan = HostChangePlan {
+            provider: "system-apt".into(),
+            dependency,
+            change: HostChangeKind::Install,
+            requires_privilege: true,
+            summary: "Install native library".into(),
+        };
+        let frame = HostChangePlanResultFrame::ok("plan-1", plan);
+        let encoded = encode_frame(&frame).unwrap();
+        let decoded: HostChangePlanResultFrame = decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).unwrap();
+        assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn host_planning_rejects_apply_unknown_and_execution_fields() {
+        for operation in ["apply_host_change", "shell", "configure"] {
+            let json = format!(
+                r#"{{"protocol":"prep.plugin/1","id":"1","type":"{operation}","dependency":{{"manager":"apt","package":"example"}}}}"#
+            );
+            assert!(decode_frame::<HostPlanningRequest>(&json, DEFAULT_MAX_FRAME_BYTES).is_err());
+        }
+        let raw = r#"{"protocol":"prep.plugin/1","id":"1","type":"plan_host_change","dependency":{"manager":"apt","package":"example"},"command":"sudo apt install example"}"#;
+        assert!(decode_frame::<HostPlanningRequest>(raw, DEFAULT_MAX_FRAME_BYTES).is_err());
+        let plan = r#"{"provider":"apt","dependency":{"manager":"apt","package":"example"},"change":"install","requires_privilege":true,"summary":"install","argv":["sudo"]}"#;
+        assert!(decode_frame::<HostChangePlan>(plan, DEFAULT_MAX_FRAME_BYTES).is_err());
+    }
 
     #[test]
     fn hello_round_trips() {
