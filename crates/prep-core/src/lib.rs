@@ -1,4 +1,5 @@
 mod archive_policy;
+mod git_tree;
 mod graph;
 mod identity;
 mod plugin;
@@ -29,3 +30,5 @@ pub use source::{
 pub use archive_policy::{
     ArchiveEntry, ArchiveEntryKind, ArchiveLimits, validate_archive_inventory,
 };
+
+pub use git_tree::validate_git_tree_listing;
