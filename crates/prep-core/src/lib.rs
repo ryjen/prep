@@ -1,3 +1,4 @@
+mod archive_policy;
 mod graph;
 mod identity;
 mod plugin;
@@ -24,3 +25,5 @@ pub use plugin_input::{
 pub use source::{
     SourceVerificationError, validate_archive_entry_path, verify_archive_bytes, verify_git_head,
 };
+
+pub use archive_policy::{ArchiveEntry, ArchiveEntryKind, ArchiveLimits, validate_archive_inventory};
