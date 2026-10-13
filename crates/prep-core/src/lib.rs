@@ -11,6 +11,7 @@ pub use plugin::{
     PluginAdmissionPolicy, PluginDiagnostics, PluginPhase, PluginProbe, PluginProbeError,
     PluginProcessPolicy, prepare_host_planning_request, probe_build_system,
     probe_build_system_with_policies, probe_build_system_with_policy,
+    validate_host_planning_response,
 };
 
 pub use plugin_input::{
