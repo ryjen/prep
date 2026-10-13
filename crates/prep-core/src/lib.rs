@@ -9,7 +9,7 @@ pub use identity::{
 };
 pub use plugin::{
     PluginAdmissionPolicy, PluginDiagnostics, PluginPhase, PluginProbe, PluginProbeError,
-    PluginProcessPolicy, prepare_host_planning_request, probe_build_system,
+    PluginProcessPolicy, prepare_host_planning_request, validate_host_planning_response, probe_build_system,
     probe_build_system_with_policies, probe_build_system_with_policy,
 };
 
