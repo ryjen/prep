@@ -2,6 +2,7 @@ mod graph;
 mod identity;
 mod plugin;
 mod plugin_input;
+mod source;
 
 pub use graph::{DependencyGraph, GraphError};
 pub use identity::{
@@ -19,3 +20,5 @@ pub use plugin_input::{
     PluginInputError, SanitizedPluginEnvironment, authorize_builder_operation,
     required_builder_capabilities,
 };
+
+pub use source::{SourceVerificationError, verify_archive_bytes, verify_git_head};
