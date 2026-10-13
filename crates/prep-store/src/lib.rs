@@ -56,7 +56,9 @@ impl fmt::Display for StoreError {
             Self::InvalidOutput { path, message } => {
                 write!(formatter, "invalid output {}: {message}", path.display())
             }
-            Self::SourceTooLarge => formatter.write_str("unverified source input exceeds size limit"),
+            Self::SourceTooLarge => {
+                formatter.write_str("unverified source input exceeds size limit")
+            }
             Self::CrossFilesystem => write!(
                 formatter,
                 "result staging and destination are on different filesystems"
@@ -506,7 +508,8 @@ impl UnverifiedSourceStage {
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let mut file = options.open(&incomplete)
+        let mut file = options
+            .open(&incomplete)
             .map_err(|source| io_error("create private archive part", &incomplete, source))?;
         drop(_store_lock);
 
@@ -514,12 +517,15 @@ impl UnverifiedSourceStage {
             let mut total = 0u64;
             let mut buffer = [0u8; 8192];
             loop {
-                let n = input.read(&mut buffer)
+                let n = input
+                    .read(&mut buffer)
                     .map_err(|source| io_error("read source archive", &incomplete, source))?;
                 if n == 0 {
                     break;
                 }
-                total = total.checked_add(n as u64).ok_or(StoreError::SourceTooLarge)?;
+                total = total
+                    .checked_add(n as u64)
+                    .ok_or(StoreError::SourceTooLarge)?;
                 if total > maximum {
                     return Err(StoreError::SourceTooLarge);
                 }
@@ -536,10 +542,13 @@ impl UnverifiedSourceStage {
                 "source staging transaction",
             )?;
             if node_exists(&completed)? {
-                return Err(StoreError::InvalidPath("source archive is already staged".to_owned()));
+                return Err(StoreError::InvalidPath(
+                    "source archive is already staged".to_owned(),
+                ));
             }
-            fs::rename(&incomplete, &completed)
-                .map_err(|source| io_error("complete unverified source archive", &completed, source))?;
+            fs::rename(&incomplete, &completed).map_err(|source| {
+                io_error("complete unverified source archive", &completed, source)
+            })?;
             Ok(total)
         })();
         if outcome.is_err() {
@@ -1434,16 +1443,28 @@ mod tests {
         assert!(!stage.untrusted_path().join("archive.part").exists());
 
         assert_eq!(
-            stage.spool_unverified_archive(&mut std::io::Cursor::new(b"abc"), 3)
+            stage
+                .spool_unverified_archive(&mut std::io::Cursor::new(b"abc"), 3)
                 .expect("spool within limit"),
             3
         );
-        let mut file = stage.open_unverified_archive().expect("completed unverified archive");
+        let mut file = stage
+            .open_unverified_archive()
+            .expect("completed unverified archive");
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).expect("read unverified bytes");
         assert_eq!(bytes, b"abc");
-        assert!(stage.spool_unverified_archive(&mut std::io::Cursor::new(b"new"), 3).is_err());
-        assert!(store.get(&result_id("9")).expect("read result store").is_none());
+        assert!(
+            stage
+                .spool_unverified_archive(&mut std::io::Cursor::new(b"new"), 3)
+                .is_err()
+        );
+        assert!(
+            store
+                .get(&result_id("9"))
+                .expect("read result store")
+                .is_none()
+        );
         let path = stage.untrusted_path().to_owned();
         drop(file);
         drop(stage);
