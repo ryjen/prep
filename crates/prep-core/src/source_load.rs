@@ -166,15 +166,15 @@ mod tests {
         assert_eq!(offline.file_bytes("readme.txt"), Some(&b"hello"[..]));
         let cache_path = store.root().join("sources/sha256").join(digest);
         fs::write(cache_path, b"altered").unwrap();
-        assert!(
+        assert!(matches!(
             load_cached_ustar(
                 &store,
                 &source,
                 ArchiveLimits::default(),
                 bytes.len() as u64
-            )
-            .is_err()
-        );
+            ),
+            Err(SourceLoadError::Store(StoreError::CorruptSource { .. }))
+        ));
     }
 
     #[test]
