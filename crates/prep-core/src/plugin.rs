@@ -153,12 +153,13 @@ pub fn validate_host_planning_response(
                 decode_frame(response_json, DEFAULT_MAX_FRAME_BYTES)
                     .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
             validate_host_response_envelope(&response, &request.id)?;
-            if let ResultFrame::Ok { value, .. } = response {
-                if !value.present && value.installed_version.is_some() {
-                    return Err(PluginProbeError::InvalidResult(
-                        "absent dependency has installed version".to_owned(),
-                    ));
-                }
+            if let ResultFrame::Ok { value, .. } = response
+                && !value.present
+                && value.installed_version.is_some()
+            {
+                return Err(PluginProbeError::InvalidResult(
+                    "absent dependency has installed version".to_owned(),
+                ));
             }
         }
         HostPlanningOperation::PlanHostChange => {
@@ -166,15 +167,14 @@ pub fn validate_host_planning_response(
                 decode_frame(response_json, DEFAULT_MAX_FRAME_BYTES)
                     .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
             validate_host_response_envelope(&response, &request.id)?;
-            if let ResultFrame::Ok { value, .. } = response {
-                if value.provider != expected_provider
+            if let ResultFrame::Ok { value, .. } = response
+                && (value.provider != expected_provider
                     || value.dependency != request.dependency
-                    || value.summary.trim().is_empty()
-                {
-                    return Err(PluginProbeError::InvalidResult(
-                        "host plan attribution or dependency mismatch".to_owned(),
-                    ));
-                }
+                    || value.summary.trim().is_empty())
+            {
+                return Err(PluginProbeError::InvalidResult(
+                    "host plan attribution or dependency mismatch".to_owned(),
+                ));
             }
         }
     }
