@@ -280,7 +280,8 @@ impl Store {
                 }
                 Err(error) => return Err(error),
             };
-            lease.lock()
+            lease
+                .lock()
                 .map_err(|source| io_error("lock source staging lease", &lock_path, source))?;
             let path = self.source_staging_root.join(&id);
             #[cfg(unix)]
@@ -293,19 +294,25 @@ impl Store {
             #[cfg(not(unix))]
             let created = fs::create_dir(&path);
             match created {
-                Ok(()) => return Ok(UnverifiedSourceStage {
-                    store: self.clone(),
-                    path,
-                    lock_path,
-                    lease: Some(lease),
-                    finished: false,
-                }),
+                Ok(()) => {
+                    return Ok(UnverifiedSourceStage {
+                        store: self.clone(),
+                        path,
+                        lock_path,
+                        lease: Some(lease),
+                        finished: false,
+                    });
+                }
                 Err(source) => {
                     release_and_remove_lock_file(lease, &lock_path)?;
                     if source.kind() == std::io::ErrorKind::AlreadyExists {
                         continue;
                     }
-                    return Err(io_error("create private source staging directory", &path, source));
+                    return Err(io_error(
+                        "create private source staging directory",
+                        &path,
+                        source,
+                    ));
                 }
             }
         }
@@ -342,8 +349,8 @@ impl Store {
         for entry in fs::read_dir(staging_root)
             .map_err(|source| io_error("read staging directory", staging_root, source))?
         {
-            let entry = entry
-                .map_err(|source| io_error("read staging entry", staging_root, source))?;
+            let entry =
+                entry.map_err(|source| io_error("read staging entry", staging_root, source))?;
             let path = entry.path();
             let file_type = entry
                 .file_type()
@@ -472,8 +479,9 @@ impl UnverifiedSourceStage {
     #[cfg(test)]
     fn leave_abandoned(mut self) -> Result<(PathBuf, PathBuf), StoreError> {
         if let Some(lease) = self.lease.take() {
-            lease.unlock()
-                .map_err(|source| io_error("unlock source staging lease", &self.lock_path, source))?;
+            lease.unlock().map_err(|source| {
+                io_error("unlock source staging lease", &self.lock_path, source)
+            })?;
         }
         self.finished = true;
         Ok((self.path.clone(), self.lock_path.clone()))
@@ -490,7 +498,9 @@ impl Drop for UnverifiedSourceStage {
                 &self.store.source_staging_root,
                 &self.path,
                 "source staging transaction",
-            ).is_ok() {
+            )
+            .is_ok()
+            {
                 let _ = fs::remove_dir_all(&self.path);
             }
             if let Some(lease) = self.lease.take() {
@@ -1322,7 +1332,6 @@ mod tests {
         StoreResultId::parse(format!("sha256:{}", byte.repeat(64))).expect("valid result id")
     }
 
-
     #[test]
     fn source_workspace_cannot_publish_build_results() {
         let temp = TestDirectory::new("source-separation");
@@ -1365,7 +1374,10 @@ mod tests {
         let temp = TestDirectory::new("source-permissions");
         let store = Store::open(&temp.0.join("store")).expect("open store");
         let stage = store.begin_unverified_source().expect("source stage");
-        let mode = fs::metadata(stage.untrusted_path()).unwrap().permissions().mode();
+        let mode = fs::metadata(stage.untrusted_path())
+            .unwrap()
+            .permissions()
+            .mode();
         assert_eq!(mode & 0o077, 0);
     }
 
