@@ -591,7 +591,6 @@ impl<'de> Deserialize<'de> for ProgressEventFrame {
     }
 }
 
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HostPlanningOperation {
     #[serde(rename = "probe_host_dependency")]
@@ -630,7 +629,11 @@ pub struct HostPlanningRequest {
 
 impl HostPlanningRequest {
     #[must_use]
-    pub fn new(id: impl Into<String>, operation: HostPlanningOperation, dependency: HostDependency) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        operation: HostPlanningOperation,
+        dependency: HostDependency,
+    ) -> Self {
         Self {
             protocol: PROTOCOL_V1.to_owned(),
             id: id.into(),
@@ -676,7 +679,6 @@ pub type HostChangePlanResultFrame = ResultFrame<HostChangePlan>;
 mod tests {
     use super::*;
 
-
     #[test]
     fn host_planning_round_trips_without_executable_apply_operation() {
         let dependency = HostDependency {
@@ -701,7 +703,8 @@ mod tests {
         };
         let frame = HostChangePlanResultFrame::ok("plan-1", plan);
         let encoded = encode_frame(&frame).unwrap();
-        let decoded: HostChangePlanResultFrame = decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).unwrap();
+        let decoded: HostChangePlanResultFrame =
+            decode_frame(&encoded, DEFAULT_MAX_FRAME_BYTES).unwrap();
         assert_eq!(decoded, frame);
     }
 
