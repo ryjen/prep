@@ -1,6 +1,9 @@
 //! Small immutable USTAR snapshots: locked digest -> validated members -> owned bytes.
 //! This deliberately performs no filesystem extraction or source publication.
-use crate::{ArchiveEntry, ArchiveEntryKind, ArchiveLimits, SourceVerificationError, inspect_ustar, verify_archive_bytes};
+use crate::{
+    ArchiveEntry, ArchiveEntryKind, ArchiveLimits, SourceVerificationError, inspect_ustar,
+    verify_archive_bytes,
+};
 use prep_manifest::{LockedSource, Sha256Digest};
 use std::collections::BTreeMap;
 use std::io::{Cursor, Read};
@@ -55,7 +58,8 @@ pub fn read_verified_ustar_snapshot(
         return Err(SourceVerificationError::TooLarge);
     }
     let mut bytes = Vec::new();
-    input.take(max_archive_bytes + 1)
+    input
+        .take(max_archive_bytes + 1)
         .read_to_end(&mut bytes)
         .map_err(SourceVerificationError::Io)?;
     if bytes.len() as u64 > max_archive_bytes {
@@ -66,14 +70,25 @@ pub fn read_verified_ustar_snapshot(
     let mut files = BTreeMap::new();
     let mut offset = 0usize;
     for entry in &entries {
-        let start = offset.checked_add(512).ok_or(SourceVerificationError::TooLarge)?;
-        let size = usize::try_from(entry.expanded_bytes)
-            .map_err(|_| SourceVerificationError::TooLarge)?;
-        let end = start.checked_add(size).ok_or(SourceVerificationError::TooLarge)?;
-        let padded = size.checked_add(511).ok_or(SourceVerificationError::TooLarge)? / 512;
-        offset = start.checked_add(
-            padded.checked_mul(512).ok_or(SourceVerificationError::TooLarge)?,
-        ).ok_or(SourceVerificationError::TooLarge)?;
+        let start = offset
+            .checked_add(512)
+            .ok_or(SourceVerificationError::TooLarge)?;
+        let size =
+            usize::try_from(entry.expanded_bytes).map_err(|_| SourceVerificationError::TooLarge)?;
+        let end = start
+            .checked_add(size)
+            .ok_or(SourceVerificationError::TooLarge)?;
+        let padded = size
+            .checked_add(511)
+            .ok_or(SourceVerificationError::TooLarge)?
+            / 512;
+        offset = start
+            .checked_add(
+                padded
+                    .checked_mul(512)
+                    .ok_or(SourceVerificationError::TooLarge)?,
+            )
+            .ok_or(SourceVerificationError::TooLarge)?;
         if offset > bytes.len() || end > bytes.len() {
             return Err(SourceVerificationError::UnsafeEntryPath);
         }
@@ -81,7 +96,12 @@ pub fn read_verified_ustar_snapshot(
             files.insert(entry.name.clone(), (start, end));
         }
     }
-    Ok(VerifiedUstarSnapshot { sha256, bytes, entries, files })
+    Ok(VerifiedUstarSnapshot {
+        sha256,
+        bytes,
+        entries,
+        files,
+    })
 }
 
 #[cfg(test)]
@@ -97,9 +117,11 @@ mod tests {
         header[156] = kind;
         header[257..263].copy_from_slice(b"ustar\0");
         header[263..265].copy_from_slice(b"00");
-        let checksum: u64 = header.iter().enumerate().map(|(i, b)| {
-            u64::from(if (148..156).contains(&i) { b' ' } else { *b })
-        }).sum();
+        let checksum: u64 = header
+            .iter()
+            .enumerate()
+            .map(|(i, b)| u64::from(if (148..156).contains(&i) { b' ' } else { *b }))
+            .sum();
         header[148..156].copy_from_slice(format!("{checksum:06o}\0 ").as_bytes());
         let mut bytes = header.to_vec();
         bytes.extend_from_slice(data);
@@ -124,16 +146,27 @@ mod tests {
         let archive = make_archive("src/main.rs", b"fn main() {}\n", b'0');
         let source = locked(&archive);
         let snapshot = read_verified_ustar_snapshot(
-            &source, &mut Cursor::new(&archive), ArchiveLimits::default(),
+            &source,
+            &mut Cursor::new(&archive),
+            ArchiveLimits::default(),
             archive.len() as u64,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(snapshot.inventory().len(), 1);
-        assert_eq!(snapshot.file_bytes("src/main.rs"), Some(&b"fn main() {}\n"[..]));
+        assert_eq!(
+            snapshot.file_bytes("src/main.rs"),
+            Some(&b"fn main() {}\n"[..])
+        );
         assert_eq!(snapshot.file_bytes("src/other.rs"), None);
         let mut altered = archive.clone();
         altered[520] ^= 1;
         assert!(matches!(
-            read_verified_ustar_snapshot(&source, &mut Cursor::new(altered), ArchiveLimits::default(), 4096),
+            read_verified_ustar_snapshot(
+                &source,
+                &mut Cursor::new(altered),
+                ArchiveLimits::default(),
+                4096
+            ),
             Err(SourceVerificationError::IdentityMismatch)
         ));
     }
@@ -142,15 +175,31 @@ mod tests {
     fn never_admits_wrong_digest_size_or_unsupported_member_types() {
         let archive = make_archive("link", b"", b'2');
         let source = locked(&archive);
-        assert!(read_verified_ustar_snapshot(
-            &source, &mut Cursor::new(&archive), ArchiveLimits::default(), 4096
-        ).is_err());
+        assert!(
+            read_verified_ustar_snapshot(
+                &source,
+                &mut Cursor::new(&archive),
+                ArchiveLimits::default(),
+                4096
+            )
+            .is_err()
+        );
         assert!(matches!(
-            read_verified_ustar_snapshot(&source, &mut Cursor::new(&archive), ArchiveLimits::default(), 64),
+            read_verified_ustar_snapshot(
+                &source,
+                &mut Cursor::new(&archive),
+                ArchiveLimits::default(),
+                64
+            ),
             Err(SourceVerificationError::TooLarge)
         ));
         assert!(matches!(
-            read_verified_ustar_snapshot(&source, &mut Cursor::new(&archive), ArchiveLimits::default(), MAX_ARCHIVE_SNAPSHOT_BYTES + 1),
+            read_verified_ustar_snapshot(
+                &source,
+                &mut Cursor::new(&archive),
+                ArchiveLimits::default(),
+                MAX_ARCHIVE_SNAPSHOT_BYTES + 1
+            ),
             Err(SourceVerificationError::TooLarge)
         ));
     }
