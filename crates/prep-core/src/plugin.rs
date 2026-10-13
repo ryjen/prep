@@ -1,6 +1,6 @@
 use prep_protocol::{
-    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, HostDependency, HostPlanningOperation,
-    HostPlanningRequest, PROTOCOL_V1, PluginCapability, PluginDescriptor, PluginOperation,
+    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, HostChangePlanResultFrame, HostDependency, HostPlanningOperation,
+    HostPlanningRequest, HostProbeResultFrame, PROTOCOL_V1, PluginCapability, PluginDescriptor, PluginOperation,
     ProbeBuildSystemRequest, ProbeBuildSystemResultFrame, ProtocolErrorCode, ResultFrame,
     ResultFrameType, decode_frame, encode_frame,
 };
@@ -132,6 +132,64 @@ pub fn prepare_host_planning_request(
         ));
     }
     Ok(HostPlanningRequest::new(id, operation, dependency))
+}
+
+/// Validate untrusted host-provider output against the exact admitted request.
+/// Returned plans are evidence only: this function cannot authorize or apply them.
+pub fn validate_host_planning_response(
+    request: &HostPlanningRequest,
+    expected_provider: &str,
+    response_json: &str,
+) -> Result<(), PluginProbeError> {
+    if request.protocol != PROTOCOL_V1 || request.id.is_empty() || expected_provider.is_empty() {
+        return Err(PluginProbeError::InvalidResult(
+            "invalid host planning request context".to_owned(),
+        ));
+    }
+    match request.operation {
+        HostPlanningOperation::ProbeHostDependency => {
+            let response: HostProbeResultFrame =
+                decode_frame(response_json, DEFAULT_MAX_FRAME_BYTES)
+                    .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
+            validate_host_response_envelope(&response, &request.id)?;
+            if let ResultFrame::Ok { value, .. } = response {
+                if !value.present && value.installed_version.is_some() {
+                    return Err(PluginProbeError::InvalidResult(
+                        "absent dependency has installed version".to_owned(),
+                    ));
+                }
+            }
+        }
+        HostPlanningOperation::PlanHostChange => {
+            let response: HostChangePlanResultFrame =
+                decode_frame(response_json, DEFAULT_MAX_FRAME_BYTES)
+                    .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
+            validate_host_response_envelope(&response, &request.id)?;
+            if let ResultFrame::Ok { value, .. } = response {
+                if value.provider != expected_provider
+                    || value.dependency != request.dependency
+                    || value.summary.trim().is_empty()
+                {
+                    return Err(PluginProbeError::InvalidResult(
+                        "host plan attribution or dependency mismatch".to_owned(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_host_response_envelope<T>(
+    response: &ResultFrame<T>,
+    request_id: &str,
+) -> Result<(), PluginProbeError> {
+    if response.protocol() != PROTOCOL_V1 || response.id() != request_id {
+        return Err(PluginProbeError::InvalidResult(
+            "host response protocol or correlation id mismatch".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn valid_host_identifier(value: &str, punctuation: &[u8], reject_traversal: bool) -> bool {
@@ -868,6 +926,58 @@ mod tests {
             ),
             Err(PluginProbeError::Protocol(_))
         ));
+    }
+
+    #[test]
+    fn host_responses_require_correlation_and_plan_attribution() {
+        let dependency = HostDependency {
+            manager: "apt".into(),
+            package: "cmake".into(),
+            version: None,
+        };
+        let request = HostPlanningRequest::new(
+            "req-1", HostPlanningOperation::PlanHostChange, dependency.clone(),
+        );
+        let good = prep_protocol::HostChangePlanResultFrame::ok(
+            "req-1",
+            prep_protocol::HostChangePlan {
+                provider: "trusted-apt".into(),
+                dependency,
+                change: prep_protocol::HostChangeKind::Install,
+                requires_privilege: true,
+                summary: "Install cmake".into(),
+            },
+        );
+        let valid = encode_frame(&good).unwrap();
+        assert!(validate_host_planning_response(&request, "trusted-apt", &valid).is_ok());
+        assert!(validate_host_planning_response(&request, "other-provider", &valid).is_err());
+        assert!(validate_host_planning_response(
+            &request, "trusted-apt", &valid.replace("req-1", "replayed")
+        ).is_err());
+        assert!(validate_host_planning_response(
+            &request, "trusted-apt", &valid.replace("cmake", "ninja")
+        ).is_err());
+        assert!(validate_host_planning_response(
+            &request, "trusted-apt", &valid.replace("prep.plugin/1", "prep.plugin/2")
+        ).is_err());
+        assert!(validate_host_planning_response(
+            &request, "trusted-apt", &format!("{valid}{}", " ".repeat(DEFAULT_MAX_FRAME_BYTES))
+        ).is_err());
+    }
+
+    #[test]
+    fn host_probe_rejects_inconsistent_presence_and_wrong_result_shape() {
+        let request = HostPlanningRequest::new(
+            "probe-1",
+            HostPlanningOperation::ProbeHostDependency,
+            HostDependency { manager: "apt".into(), package: "cmake".into(), version: None },
+        );
+        let invalid = r#"{"protocol":"prep.plugin/1","id":"probe-1","type":"result","status":"ok","value":{"present":false,"installed_version":"3.29"}}"#;
+        assert!(validate_host_planning_response(&request, "trusted-apt", invalid).is_err());
+        let valid = r#"{"protocol":"prep.plugin/1","id":"probe-1","type":"result","status":"ok","value":{"present":true,"installed_version":"3.29"}}"#;
+        assert!(validate_host_planning_response(&request, "trusted-apt", valid).is_ok());
+        let wrong = r#"{"protocol":"prep.plugin/1","id":"probe-1","type":"result","status":"ok","value":{"provider":"trusted-apt","summary":"install"}}"#;
+        assert!(validate_host_planning_response(&request, "trusted-apt", wrong).is_err());
     }
 
     #[test]
