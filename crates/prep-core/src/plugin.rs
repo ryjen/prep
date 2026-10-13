@@ -1,8 +1,9 @@
 use prep_protocol::{
-    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, HostChangePlanResultFrame, HostDependency, HostPlanningOperation,
-    HostPlanningRequest, HostProbeResultFrame, PROTOCOL_V1, PluginCapability, PluginDescriptor, PluginOperation,
-    ProbeBuildSystemRequest, ProbeBuildSystemResultFrame, ProtocolErrorCode, ResultFrame,
-    ResultFrameType, decode_frame, encode_frame,
+    DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, HostChangePlanResultFrame,
+    HostDependency, HostPlanningOperation, HostPlanningRequest, HostProbeResultFrame, PROTOCOL_V1,
+    PluginCapability, PluginDescriptor, PluginOperation, ProbeBuildSystemRequest,
+    ProbeBuildSystemResultFrame, ProtocolErrorCode, ResultFrame, ResultFrameType, decode_frame,
+    encode_frame,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -936,7 +937,9 @@ mod tests {
             version: None,
         };
         let request = HostPlanningRequest::new(
-            "req-1", HostPlanningOperation::PlanHostChange, dependency.clone(),
+            "req-1",
+            HostPlanningOperation::PlanHostChange,
+            dependency.clone(),
         );
         let good = prep_protocol::HostChangePlanResultFrame::ok(
             "req-1",
@@ -951,18 +954,38 @@ mod tests {
         let valid = encode_frame(&good).unwrap();
         assert!(validate_host_planning_response(&request, "trusted-apt", &valid).is_ok());
         assert!(validate_host_planning_response(&request, "other-provider", &valid).is_err());
-        assert!(validate_host_planning_response(
-            &request, "trusted-apt", &valid.replace("req-1", "replayed")
-        ).is_err());
-        assert!(validate_host_planning_response(
-            &request, "trusted-apt", &valid.replace("cmake", "ninja")
-        ).is_err());
-        assert!(validate_host_planning_response(
-            &request, "trusted-apt", &valid.replace("prep.plugin/1", "prep.plugin/2")
-        ).is_err());
-        assert!(validate_host_planning_response(
-            &request, "trusted-apt", &format!("{valid}{}", " ".repeat(DEFAULT_MAX_FRAME_BYTES))
-        ).is_err());
+        assert!(
+            validate_host_planning_response(
+                &request,
+                "trusted-apt",
+                &valid.replace("req-1", "replayed")
+            )
+            .is_err()
+        );
+        assert!(
+            validate_host_planning_response(
+                &request,
+                "trusted-apt",
+                &valid.replace("cmake", "ninja")
+            )
+            .is_err()
+        );
+        assert!(
+            validate_host_planning_response(
+                &request,
+                "trusted-apt",
+                &valid.replace("prep.plugin/1", "prep.plugin/2")
+            )
+            .is_err()
+        );
+        assert!(
+            validate_host_planning_response(
+                &request,
+                "trusted-apt",
+                &format!("{valid}{}", " ".repeat(DEFAULT_MAX_FRAME_BYTES))
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -970,7 +993,11 @@ mod tests {
         let request = HostPlanningRequest::new(
             "probe-1",
             HostPlanningOperation::ProbeHostDependency,
-            HostDependency { manager: "apt".into(), package: "cmake".into(), version: None },
+            HostDependency {
+                manager: "apt".into(),
+                package: "cmake".into(),
+                version: None,
+            },
         );
         let invalid = r#"{"protocol":"prep.plugin/1","id":"probe-1","type":"result","status":"ok","value":{"present":false,"installed_version":"3.29"}}"#;
         assert!(validate_host_planning_response(&request, "trusted-apt", invalid).is_err());
