@@ -113,7 +113,11 @@ pub fn prepare_host_planning_request(
     if !valid_host_identifier(&dependency.manager, b"+._-")
         || !valid_host_identifier(
             &dependency.package,
-            if dependency.manager == "brew" { b"+._-@" } else { b"+._-" },
+            if dependency.manager == "brew" {
+                &b"+._-@"[..]
+            } else {
+                &b"+._-"[..]
+            },
         )
         || dependency
             .version
