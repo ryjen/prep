@@ -2,10 +2,9 @@
 
 use prep_protocol::{
     DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginCapability,
-    PluginDescriptor, PluginOperation, ProbeBuildSystemRequest, ResultFrame, decode_frame,
-    encode_frame,
+    PluginDescriptor, PluginOperation, ProbeBuildSystemRequest, ProbeBuildSystemResult,
+    ResultFrame, decode_frame, encode_frame,
 };
-use serde_json::json;
 use std::error::Error;
 use std::io::{self, BufRead, Write};
 use std::process::{Child, Command, Stdio};
@@ -120,14 +119,7 @@ fn write_success_result(
     stdout: &mut impl Write,
     probe: ProbeBuildSystemRequest,
 ) -> Result<(), Box<dyn Error>> {
-    let result = ResultFrame {
-        protocol: PROTOCOL_V1.to_owned(),
-        id: probe.id,
-        frame_type: "result".to_owned(),
-        status: "ok".to_owned(),
-        value: Some(json!({"supported": true})),
-        error: None,
-    };
+    let result = ResultFrame::ok(probe.id, ProbeBuildSystemResult { supported: true });
     writeln!(stdout, "{}", encode_frame(&result)?)?;
     stdout.flush()?;
     Ok(())

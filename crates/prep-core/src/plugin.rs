@@ -1,6 +1,7 @@
 use prep_protocol::{
     DEFAULT_MAX_FRAME_BYTES, HelloFrame, HelloResultFrame, PROTOCOL_V1, PluginCapability,
-    PluginOperation, ProbeBuildSystemRequest, ResultFrame, decode_frame, encode_frame,
+    PluginOperation, ProbeBuildSystemRequest, ProbeBuildSystemResultFrame, ProtocolErrorCode,
+    ResultFrame, ResultFrameType, decode_frame, encode_frame,
 };
 use std::collections::BTreeSet;
 use std::error::Error;
@@ -115,7 +116,7 @@ pub enum PluginProbeError {
     InvalidHandshake(String),
     InvalidResult(String),
     PluginReturnedError {
-        code: String,
+        code: ProtocolErrorCode,
         message: String,
     },
     PolicyDenied {
@@ -241,8 +242,9 @@ pub fn probe_build_system_with_policies(
 
         write_protocol_frame(&mut stdin, &ProbeBuildSystemRequest::new(PROBE_ID))?;
         let result_line = receive_protocol_line(&stdout, deadline, PluginPhase::Result)?;
-        let result: ResultFrame = decode_frame(&result_line, policy.max_frame_bytes)
-            .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
+        let result: ProbeBuildSystemResultFrame =
+            decode_frame(&result_line, policy.max_frame_bytes)
+                .map_err(|error| PluginProbeError::Protocol(error.to_string()))?;
         validate_result(&result)?;
 
         Ok::<_, LifecycleFailure>((hello.plugin, result))
@@ -287,33 +289,18 @@ pub fn probe_build_system_with_policies(
         });
     }
 
-    if result.status == "error" {
-        let error = result.error.ok_or_else(|| {
-            PluginProbeError::InvalidResult("error status omitted error details".to_owned())
-        })?;
-        return Err(PluginProbeError::PluginReturnedError {
+    match result {
+        ResultFrame::Error { error, .. } => Err(PluginProbeError::PluginReturnedError {
             code: error.code,
             message: error.message,
-        });
+        }),
+        ResultFrame::Ok { value, .. } => Ok(PluginProbe {
+            name: plugin.name,
+            version: plugin.version,
+            supported: value.supported,
+            diagnostics,
+        }),
     }
-
-    let supported = result
-        .value
-        .as_ref()
-        .and_then(|value| value.get("supported"))
-        .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| {
-            PluginProbeError::InvalidResult(
-                "successful probe result must contain boolean value.supported".to_owned(),
-            )
-        })?;
-
-    Ok(PluginProbe {
-        name: plugin.name,
-        version: plugin.version,
-        supported,
-        diagnostics,
-    })
 }
 
 #[derive(Debug)]
@@ -522,32 +509,19 @@ fn validate_handshake(hello: &HelloResultFrame) -> Result<(), PluginProbeError> 
     Ok(())
 }
 
-fn validate_result(result: &ResultFrame) -> Result<(), PluginProbeError> {
-    if result.protocol != PROTOCOL_V1 {
+fn validate_result<T>(result: &ResultFrame<T>) -> Result<(), PluginProbeError> {
+    if result.protocol() != PROTOCOL_V1 {
         return Err(PluginProbeError::InvalidResult(format!(
             "expected protocol {PROTOCOL_V1}, got {}",
-            result.protocol
+            result.protocol()
         )));
     }
-    if result.id != PROBE_ID || result.frame_type != "result" {
+    if result.id() != PROBE_ID || result.frame_type() != ResultFrameType::Result {
         return Err(PluginProbeError::InvalidResult(
             "unexpected result id/type".to_owned(),
         ));
     }
-
-    match result.status.as_str() {
-        "ok" if result.error.is_none() => Ok(()),
-        "ok" => Err(PluginProbeError::InvalidResult(
-            "ok status must not contain error details".to_owned(),
-        )),
-        "error" if result.error.is_some() => Ok(()),
-        "error" => Err(PluginProbeError::InvalidResult(
-            "error status must contain error details".to_owned(),
-        )),
-        status => Err(PluginProbeError::InvalidResult(format!(
-            "unknown result status {status}"
-        ))),
-    }
+    Ok(())
 }
 
 fn write_protocol_frame<T: serde::Serialize>(
@@ -692,19 +666,8 @@ mod tests {
     }
 
     #[test]
-    fn mixed_success_and_error_payload_is_rejected() {
-        let result = ResultFrame {
-            protocol: PROTOCOL_V1.to_owned(),
-            id: PROBE_ID.to_owned(),
-            frame_type: "result".to_owned(),
-            status: "ok".to_owned(),
-            value: None,
-            error: Some(prep_protocol::ProtocolErrorBody {
-                code: "internal".to_owned(),
-                message: "should not coexist with ok".to_owned(),
-                retryable: false,
-            }),
-        };
+    fn result_metadata_is_validated_after_typed_decode() {
+        let result = ResultFrame::ok("wrong-id", ());
 
         assert!(matches!(
             validate_result(&result),

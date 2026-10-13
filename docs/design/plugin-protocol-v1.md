@@ -118,6 +118,8 @@ Failure response:
 
 Process exit status is not the domain result. A plugin process that crashes or exits before returning a valid terminal result produces a `plugin_process_failed` error in the core.
 
+Protocol v1 treats terminal result status and domain error codes as closed vocabularies. A terminal frame is structurally either `ok` with a typed value or `error` with typed error details; mixed success/error payloads and unknown status/error discriminants are protocol violations.
+
 ## 5. Operation families
 
 Protocol v1 supports only operation families required by the first implementation. Unused future extension points are not part of the conformance contract.
@@ -230,6 +232,8 @@ User prompts are structured events:
   "secret":true
 }
 ```
+
+Progress events may omit numeric progress entirely. When numeric progress is present, `completed` and `total` must appear together, `total` must be greater than zero, and `completed` must not exceed `total`.
 
 Prep decides whether prompting is permitted, obtains the value without echo when appropriate, and responds:
 
