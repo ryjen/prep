@@ -186,7 +186,8 @@ mod tests {
             &mut Cursor::new(&archive),
             ArchiveLimits::default(),
             archive.len() as u64,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(snapshot.inventory().len(), 3);
         assert_eq!(snapshot.file_bytes("src/"), None);
         assert_eq!(snapshot.file_bytes("src/large.bin"), Some(&large[..]));
