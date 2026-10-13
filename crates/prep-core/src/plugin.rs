@@ -744,6 +744,54 @@ mod tests {
             .expect("explicitly allowed capability should be admitted");
     }
 
+
+    #[test]
+    fn host_planning_requires_declared_operation_and_explicit_policy() {
+        let dependency = HostDependency {
+            manager: "apt".into(),
+            package: "cmake".into(),
+            version: None,
+        };
+        let plugin = PluginDescriptor {
+            name: "host-provider".into(),
+            version: "1".into(),
+            operations: vec![PluginOperation::ProbeHostDependency],
+            capabilities: vec![PluginCapability::HostPackageManager],
+        };
+        assert!(matches!(
+            prepare_host_planning_request(
+                &plugin, &PluginAdmissionPolicy::deny_all(),
+                HostPlanningOperation::ProbeHostDependency, dependency.clone(), "1"
+            ),
+            Err(PluginProbeError::PolicyDenied { capability: PluginCapability::HostPackageManager })
+        ));
+        let policy = PluginAdmissionPolicy::allow([PluginCapability::HostPackageManager]);
+        assert!(prepare_host_planning_request(
+            &plugin, &policy, HostPlanningOperation::ProbeHostDependency, dependency.clone(), "1"
+        ).is_ok());
+        assert!(matches!(
+            prepare_host_planning_request(
+                &plugin, &policy, HostPlanningOperation::PlanHostChange, dependency.clone(), "1"
+            ),
+            Err(PluginProbeError::InvalidHandshake(_))
+        ));
+        let mut undeclared = plugin.clone();
+        undeclared.capabilities.clear();
+        assert!(matches!(
+            prepare_host_planning_request(
+                &undeclared, &policy, HostPlanningOperation::ProbeHostDependency, dependency.clone(), "1"
+            ),
+            Err(PluginProbeError::PolicyDenied { capability: PluginCapability::HostPackageManager })
+        ));
+        let malformed = HostDependency { package: "../bad".into(), ..dependency };
+        assert!(matches!(
+            prepare_host_planning_request(
+                &plugin, &policy, HostPlanningOperation::ProbeHostDependency, malformed, "1"
+            ),
+            Err(PluginProbeError::Protocol(_))
+        ));
+    }
+
     #[test]
     fn diagnostic_buffer_is_bounded() {
         let mut buffer = DiagnosticBuffer::default();
