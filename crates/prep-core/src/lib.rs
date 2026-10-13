@@ -1,5 +1,6 @@
 mod archive_policy;
 mod git_tree;
+mod git_command;
 mod graph;
 mod identity;
 mod plugin;
