@@ -26,4 +26,6 @@ pub use source::{
     SourceVerificationError, validate_archive_entry_path, verify_archive_bytes, verify_git_head,
 };
 
-pub use archive_policy::{ArchiveEntry, ArchiveEntryKind, ArchiveLimits, validate_archive_inventory};
+pub use archive_policy::{
+    ArchiveEntry, ArchiveEntryKind, ArchiveLimits, validate_archive_inventory,
+};
