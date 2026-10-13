@@ -517,9 +517,13 @@ impl UnverifiedSourceStage {
             let mut total = 0u64;
             let mut buffer = [0u8; 8192];
             loop {
-                let n = input
-                    .read(&mut buffer)
-                    .map_err(|source| io_error("read source archive", &incomplete, source))?;
+                let n = match input.read(&mut buffer) {
+                    Ok(count) => count,
+                    Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(source) => {
+                        return Err(io_error("read source archive", &incomplete, source));
+                    }
+                };
                 if n == 0 {
                     break;
                 }
@@ -1427,6 +1431,53 @@ mod tests {
 
     fn result_id(byte: &str) -> StoreResultId {
         StoreResultId::parse(format!("sha256:{}", byte.repeat(64))).expect("valid result id")
+    }
+
+    #[test]
+    fn unverified_source_read_failures_clean_up_and_transient_interrupts_retry() {
+        struct OneFailure {
+            emitted: bool,
+            fail_with: std::io::ErrorKind,
+        }
+        impl Read for OneFailure {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if !self.emitted {
+                    self.emitted = true;
+                    buffer[0] = b'x';
+                    return Ok(1);
+                }
+                Err(self.fail_with.into())
+            }
+        }
+        let temp = TestDirectory::new("source-spool-read-errors");
+        let store = Store::open(&temp.0.join("store")).expect("store");
+        let stage = store.begin_unverified_source().expect("stage");
+        let mut failing = OneFailure {
+            emitted: false,
+            fail_with: std::io::ErrorKind::BrokenPipe,
+        };
+        assert!(stage.spool_unverified_archive(&mut failing, 8).is_err());
+        assert!(!stage.untrusted_path().join("archive.part").exists());
+        assert!(stage.open_unverified_archive().is_err());
+
+        struct InterruptedOnce {
+            inner: std::io::Cursor<&'static [u8]>,
+            interrupted: bool,
+        }
+        impl Read for InterruptedOnce {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if !self.interrupted {
+                    self.interrupted = true;
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                self.inner.read(buffer)
+            }
+        }
+        let mut input = InterruptedOnce {
+            inner: std::io::Cursor::new(b"abc"),
+            interrupted: false,
+        };
+        assert_eq!(stage.spool_unverified_archive(&mut input, 3).unwrap(), 3);
     }
 
     #[test]
