@@ -8,6 +8,7 @@ mod identity;
 mod plugin;
 mod plugin_input;
 mod source;
+mod source_extract;
 mod source_load;
 mod verified_ustar;
 
@@ -52,3 +53,5 @@ pub use verified_ustar::{
 pub use source_load::{SourceLoadError, load_cached_ustar, load_staged_ustar};
 
 pub use git_run::{GitResolutionError, GitResolutionLimits, resolve_git_reference};
+
+pub use source_extract::{SourceExtractionError, extract_verified_ustar};
