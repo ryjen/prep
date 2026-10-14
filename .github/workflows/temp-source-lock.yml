@@ -1,11 +1,7 @@
 name: Temporary source extractor lockfile resolution
 
 on:
-  push:
-    branches: [feat/capability-archive-extraction]
-    paths:
-      - .github/workflows/temp-source-lock.yml
-      - crates/prep-core/Cargo.toml
+  pull_request:
 permissions:
   contents: read
 jobs:
