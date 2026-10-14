@@ -6,7 +6,7 @@ use crate::{
     ArchiveEntryKind, ArchiveLimits, SourceVerificationError, VerifiedUstarSnapshot,
     validate_archive_inventory,
 };
-use cap_std::fs::{Dir, OpenOptions};
+use std::fs::File;
 use std::fmt;
 use std::io::{self, Write};
 
@@ -37,67 +37,97 @@ impl From<SourceVerificationError> for SourceExtractionError {
     }
 }
 
-fn ensure_real_directory(parent: &Dir, name: &str) -> Result<Dir, SourceExtractionError> {
-    match parent.create_dir(name) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            let metadata = parent.symlink_metadata(name)?;
-            if !metadata.is_dir() || metadata.file_type().is_symlink() {
-                return Err(SourceExtractionError::UnsafeTarget);
-            }
-        }
-        Err(error) => return Err(error.into()),
+#[cfg(unix)]
+impl From<rustix::io::Errno> for SourceExtractionError {
+    fn from(value: rustix::io::Errno) -> Self {
+        Self::Io(io::Error::from_raw_os_error(value.raw_os_error()))
     }
-    Ok(parent.open_dir(name)?)
 }
 
-/// Extracts into an empty directory handle using only capability-relative
-/// operations. Files use create_new; no overwrites, links, or special files.
-/// The only data source is a digest-checked, owned immutable USTAR snapshot.
-/// On error, discard the whole private target; this function does not publish.
+#[cfg(unix)]
+fn directory_is_empty(directory: &File) -> Result<bool, SourceExtractionError> {
+    let mut entries = rustix::fs::Dir::read_from(directory)?;
+    for item in &mut entries {
+        let entry = item?;
+        if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(unix)]
+fn ensure_subdirectory(
+    parent: &rustix::fd::OwnedFd,
+    component: &str,
+    relative_path: &str,
+    created: &mut std::collections::BTreeSet<String>,
+) -> Result<rustix::fd::OwnedFd, SourceExtractionError> {
+    use rustix::fs::{Mode, OFlags, mkdirat, openat};
+    match mkdirat(parent, component, Mode::from_bits_truncate(0o700)) {
+        Ok(()) => { created.insert(relative_path.to_owned()); }
+        Err(rustix::io::Errno::EXIST) if created.contains(relative_path) => {}
+        Err(rustix::io::Errno::EXIST) => return Err(SourceExtractionError::UnsafeTarget),
+        Err(error) => return Err(error.into()),
+    }
+    Ok(openat(
+        parent, component,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?)
+}
+
+/// Only a trusted private Unix directory FD is accepted. Every untrusted
+/// component is opened relative to an already-held directory descriptor with
+/// NOFOLLOW; no source tree is published or made eligible for builds.
+#[cfg(unix)]
 pub fn extract_verified_ustar(
     snapshot: &VerifiedUstarSnapshot,
-    destination: &Dir,
+    destination: &File,
     limits: ArchiveLimits,
 ) -> Result<u64, SourceExtractionError> {
+    use rustix::fs::{Mode, OFlags, openat};
     let expected = validate_archive_inventory(snapshot.inventory(), limits)?;
-    if destination.read_dir(".")?.next().is_some() {
+    if !directory_is_empty(destination)? {
         return Err(SourceExtractionError::UnsafeTarget);
     }
-    let mut written = 0_u64;
+    let mut created = std::collections::BTreeSet::new();
+    let mut written = 0u64;
     for entry in snapshot.inventory() {
-        let mut parent = destination.try_clone()?;
+        let mut parent = openat(
+            destination, ".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
         let mut components = entry.name.split('/').peekable();
+        let mut relative_path = String::new();
         while let Some(component) = components.next() {
+            if !relative_path.is_empty() { relative_path.push('/'); }
+            relative_path.push_str(component);
             if components.peek().is_some() || entry.kind == ArchiveEntryKind::Directory {
-                parent = ensure_real_directory(&parent, component)?;
+                parent = ensure_subdirectory(&parent, component, &relative_path, &mut created)?;
                 continue;
             }
             if entry.kind != ArchiveEntryKind::RegularFile {
-                return Err(SourceExtractionError::InvalidSource(
-                    SourceVerificationError::UnsafeEntryPath,
-                ));
+                return Err(SourceVerificationError::UnsafeEntryPath.into());
             }
-            let bytes =
-                snapshot
-                    .file_bytes(&entry.name)
-                    .ok_or(SourceExtractionError::InvalidSource(
-                        SourceVerificationError::UnsafeEntryPath,
-                    ))?;
+            let bytes = snapshot.file_bytes(&entry.name)
+                .ok_or(SourceVerificationError::UnsafeEntryPath)?;
             if bytes.len() as u64 != entry.expanded_bytes {
-                return Err(SourceExtractionError::InvalidSource(
-                    SourceVerificationError::IdentityMismatch,
-                ));
+                return Err(SourceVerificationError::IdentityMismatch.into());
             }
-            written = written
-                .checked_add(bytes.len() as u64)
+            written = written.checked_add(bytes.len() as u64)
                 .ok_or(SourceVerificationError::TooLarge)?;
-            if written > limits.max_total_bytes {
+            if written > limits.max_total_bytes || bytes.len() as u64 > limits.max_entry_bytes {
                 return Err(SourceVerificationError::TooLarge.into());
             }
-            let mut options = OpenOptions::new();
-            options.write(true).create_new(true);
-            let mut file = parent.open_with(component, &options)?;
+            let fd = openat(
+                &parent, component,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL
+                    | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::from_bits_truncate(0o600),
+            )?;
+            let mut file = File::from(fd);
             file.write_all(bytes)?;
             file.sync_all()?;
         }
@@ -108,11 +138,19 @@ pub fn extract_verified_ustar(
     Ok(written)
 }
 
+#[cfg(not(unix))]
+pub fn extract_verified_ustar(
+    _snapshot: &VerifiedUstarSnapshot,
+    _destination: &File,
+    _limits: ArchiveLimits,
+) -> Result<u64, SourceExtractionError> {
+    Err(SourceExtractionError::UnsafeTarget)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::read_verified_ustar_snapshot;
-    use cap_std::ambient_authority;
     use prep_manifest::{
         LockedSource, PackageVersion, PluginName, ProviderIdentity, Sha256Digest, SourceUrl,
     };
@@ -133,8 +171,8 @@ mod tests {
             fs::create_dir(&path).unwrap();
             Self(path)
         }
-        fn capability(&self) -> Dir {
-            Dir::open_ambient_dir(&self.0, ambient_authority()).unwrap()
+        fn capability(&self) -> File {
+            File::open(&self.0).unwrap()
         }
     }
     impl Drop for TemporaryDir {
