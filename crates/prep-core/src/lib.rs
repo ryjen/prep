@@ -1,8 +1,8 @@
 mod archive_policy;
 mod archive_tar;
 mod git_command;
-mod git_tree;
 mod git_run;
+mod git_tree;
 mod graph;
 mod identity;
 mod plugin;
