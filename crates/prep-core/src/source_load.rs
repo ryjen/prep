@@ -36,7 +36,9 @@ impl From<SourceVerificationError> for SourceLoadError {
 }
 
 impl From<crate::SourceExtractionError> for SourceLoadError {
-    fn from(error: crate::SourceExtractionError) -> Self { Self::Extraction(error) }
+    fn from(error: crate::SourceExtractionError) -> Self {
+        Self::Extraction(error)
+    }
 }
 
 /// Validate the locked archive and write its safe members ONLY into a leased,
@@ -50,7 +52,11 @@ pub fn extract_staged_ustar(
 ) -> Result<u64, SourceLoadError> {
     let snapshot = load_staged_ustar(stage, lock, limits, maximum)?;
     let destination = stage.begin_unverified_source_tree()?;
-    Ok(crate::extract_verified_ustar(&snapshot, &destination, limits)?)
+    Ok(crate::extract_verified_ustar(
+        &snapshot,
+        &destination,
+        limits,
+    )?)
 }
 
 /// Ingest staged but unverified archive bytes into an independently locked,
@@ -177,16 +183,23 @@ mod tests {
                 &source,
                 ArchiveLimits::default(),
                 bytes.len() as u64,
-            ).unwrap(),
+            )
+            .unwrap(),
             5
         );
         assert_eq!(
             fs::read(stage.untrusted_path().join("tree/readme.txt")).unwrap(),
             b"hello"
         );
-        assert!(extract_staged_ustar(
-            &stage, &source, ArchiveLimits::default(), bytes.len() as u64
-        ).is_err());
+        assert!(
+            extract_staged_ustar(
+                &stage,
+                &source,
+                ArchiveLimits::default(),
+                bytes.len() as u64
+            )
+            .is_err()
+        );
 
         store
             .cache_source_blob(&stage, digest, bytes.len() as u64)
