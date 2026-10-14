@@ -715,33 +715,41 @@ impl UnverifiedSourceStage {
             &self.path,
             "source staging transaction",
         )?;
-        let id = self.path.file_name()
+        let id = self
+            .path
+            .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| StoreError::InvalidPath("nonportable source stage id".to_owned()))?;
-        let flags = OFlags::RDONLY | OFlags::DIRECTORY
-            | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        let root_fd = open(&self.store.source_staging_root, flags, Mode::empty())
-            .map_err(|e| io_error(
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let root_fd = open(&self.store.source_staging_root, flags, Mode::empty()).map_err(|e| {
+            io_error(
                 "open source stage root descriptor",
                 &self.store.source_staging_root,
                 std::io::Error::from_raw_os_error(e.raw_os_error()),
-            ))?;
-        let stage_fd = openat(&root_fd, id, flags, Mode::empty())
-            .map_err(|e| io_error(
-                "open leased source stage descriptor", &self.path,
+            )
+        })?;
+        let stage_fd = openat(&root_fd, id, flags, Mode::empty()).map_err(|e| {
+            io_error(
+                "open leased source stage descriptor",
+                &self.path,
                 std::io::Error::from_raw_os_error(e.raw_os_error()),
-            ))?;
+            )
+        })?;
         let tree_path = self.path.join("tree");
-        mkdirat(&stage_fd, "tree", Mode::from_bits_truncate(0o700))
-            .map_err(|e| io_error(
-                "create private unverified tree", &tree_path,
+        mkdirat(&stage_fd, "tree", Mode::from_bits_truncate(0o700)).map_err(|e| {
+            io_error(
+                "create private unverified tree",
+                &tree_path,
                 std::io::Error::from_raw_os_error(e.raw_os_error()),
-            ))?;
-        let tree_fd = openat(&stage_fd, "tree", flags, Mode::empty())
-            .map_err(|e| io_error(
-                "open private unverified tree", &tree_path,
+            )
+        })?;
+        let tree_fd = openat(&stage_fd, "tree", flags, Mode::empty()).map_err(|e| {
+            io_error(
+                "open private unverified tree",
+                &tree_path,
                 std::io::Error::from_raw_os_error(e.raw_os_error()),
-            ))?;
+            )
+        })?;
         Ok(File::from(tree_fd))
     }
 
