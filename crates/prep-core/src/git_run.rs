@@ -249,23 +249,36 @@ mod tests {
         ));
         std::fs::create_dir(&directory).unwrap();
         let init = Command::new("git")
-            .arg("init").arg("--bare").arg("-q").arg(&directory)
-            .status().unwrap();
+            .arg("init")
+            .arg("--bare")
+            .arg("-q")
+            .arg(&directory)
+            .status()
+            .unwrap();
         assert!(init.success());
         let mut hash = Command::new("git")
-            .arg("--git-dir").arg(&directory)
-            .arg("hash-object").arg("-w").arg("--stdin")
-            .stdin(Stdio::piped()).stdout(Stdio::piped())
-            .spawn().unwrap();
-        hash.stdin.take().unwrap().write_all(b"not a commit").unwrap();
+            .arg("--git-dir")
+            .arg(&directory)
+            .arg("hash-object")
+            .arg("-w")
+            .arg("--stdin")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        hash.stdin
+            .take()
+            .unwrap()
+            .write_all(b"not a commit")
+            .unwrap();
         let output = hash.wait_with_output().unwrap();
         assert!(output.status.success());
-        let object = GitCommit::parse(
-            String::from_utf8(output.stdout).unwrap().trim()
-        ).unwrap();
+        let object = GitCommit::parse(String::from_utf8(output.stdout).unwrap().trim()).unwrap();
         assert!(matches!(
             inspect_git_commit_type(
-                Path::new("git"), &directory, &object,
+                Path::new("git"),
+                &directory,
+                &object,
                 GitResolutionLimits::default()
             ),
             Err(GitResolutionError::UnexpectedObjectType)
