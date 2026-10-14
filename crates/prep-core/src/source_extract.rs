@@ -2,7 +2,10 @@
 //! directory capability. This has no path-based ambient filesystem authority.
 //! Callers must supply a private store-owned target and discard it on failure;
 //! no source tree is published or made eligible for builds by this function.
-use crate::{ArchiveEntryKind, ArchiveLimits, SourceVerificationError, VerifiedUstarSnapshot, validate_archive_inventory};
+use crate::{
+    ArchiveEntryKind, ArchiveLimits, SourceVerificationError, VerifiedUstarSnapshot,
+    validate_archive_inventory,
+};
 use cap_std::fs::{Dir, OpenOptions};
 use std::fmt;
 use std::io::{self, Write};
@@ -24,10 +27,14 @@ impl fmt::Display for SourceExtractionError {
 }
 impl std::error::Error for SourceExtractionError {}
 impl From<io::Error> for SourceExtractionError {
-    fn from(value: io::Error) -> Self { Self::Io(value) }
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
 }
 impl From<SourceVerificationError> for SourceExtractionError {
-    fn from(value: SourceVerificationError) -> Self { Self::InvalidSource(value) }
+    fn from(value: SourceVerificationError) -> Self {
+        Self::InvalidSource(value)
+    }
 }
 
 fn ensure_real_directory(parent: &Dir, name: &str) -> Result<Dir, SourceExtractionError> {
@@ -71,15 +78,19 @@ pub fn extract_verified_ustar(
                     SourceVerificationError::UnsafeEntryPath,
                 ));
             }
-            let bytes = snapshot.file_bytes(&entry.name).ok_or(
-                SourceExtractionError::InvalidSource(SourceVerificationError::UnsafeEntryPath)
-            )?;
+            let bytes =
+                snapshot
+                    .file_bytes(&entry.name)
+                    .ok_or(SourceExtractionError::InvalidSource(
+                        SourceVerificationError::UnsafeEntryPath,
+                    ))?;
             if bytes.len() as u64 != entry.expanded_bytes {
                 return Err(SourceExtractionError::InvalidSource(
                     SourceVerificationError::IdentityMismatch,
                 ));
             }
-            written = written.checked_add(bytes.len() as u64)
+            written = written
+                .checked_add(bytes.len() as u64)
                 .ok_or(SourceVerificationError::TooLarge)?;
             if written > limits.max_total_bytes {
                 return Err(SourceVerificationError::TooLarge.into());
@@ -101,19 +112,22 @@ pub fn extract_verified_ustar(
 mod tests {
     use super::*;
     use crate::read_verified_ustar_snapshot;
-    use prep_manifest::{LockedSource, PackageVersion, PluginName, ProviderIdentity, Sha256Digest, SourceUrl};
-    use sha2::{Digest, Sha256};
-    use std::io::Cursor;
-    use std::fs;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use cap_std::ambient_authority;
+    use prep_manifest::{
+        LockedSource, PackageVersion, PluginName, ProviderIdentity, Sha256Digest, SourceUrl,
+    };
+    use sha2::{Digest, Sha256};
+    use std::fs;
+    use std::io::Cursor;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     struct TemporaryDir(std::path::PathBuf);
     impl TemporaryDir {
         fn new() -> Self {
             let path = std::env::temp_dir().join(format!(
-                "prep-archive-capability-{}-{}", std::process::id(),
+                "prep-archive-capability-{}-{}",
+                std::process::id(),
                 NEXT.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir(&path).unwrap();
@@ -124,7 +138,9 @@ mod tests {
         }
     }
     impl Drop for TemporaryDir {
-        fn drop(&mut self) { let _ = fs::remove_dir_all(&self.0); }
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
     }
 
     fn tar_entry(name: &str, contents: &[u8], kind: u8) -> Vec<u8> {
@@ -134,9 +150,11 @@ mod tests {
         header[156] = kind;
         header[257..263].copy_from_slice(b"ustar\0");
         header[263..265].copy_from_slice(b"00");
-        let sum: u64 = header.iter().enumerate().map(|(i,b)| {
-            u64::from(if (148..156).contains(&i) { b' ' } else { *b })
-        }).sum();
+        let sum: u64 = header
+            .iter()
+            .enumerate()
+            .map(|(i, b)| u64::from(if (148..156).contains(&i) { b' ' } else { *b }))
+            .sum();
         header[148..156].copy_from_slice(format!("{sum:06o}\0 ").as_bytes());
         let mut result = header.to_vec();
         result.extend_from_slice(contents);
@@ -158,7 +176,8 @@ mod tests {
             &mut Cursor::new(tar),
             ArchiveLimits::default(),
             tar.len() as u64,
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     #[test]
@@ -176,7 +195,9 @@ mod tests {
         );
         assert_eq!(fs::read(target.0.join("src/large.bin")).unwrap(), long);
         assert_eq!(fs::read(target.0.join("src/end.txt")).unwrap(), b"end");
-        assert!(extract_verified_ustar(&s, &target.capability(), ArchiveLimits::default()).is_err());
+        assert!(
+            extract_verified_ustar(&s, &target.capability(), ArchiveLimits::default()).is_err()
+        );
     }
 
     #[test]
@@ -217,7 +238,9 @@ mod tests {
         let target = TemporaryDir::new();
         let outside = TemporaryDir::new();
         symlink(&outside.0, target.0.join("src")).unwrap();
-        assert!(extract_verified_ustar(&s, &target.capability(), ArchiveLimits::default()).is_err());
+        assert!(
+            extract_verified_ustar(&s, &target.capability(), ArchiveLimits::default()).is_err()
+        );
         assert!(!outside.0.join("file").exists());
     }
 }
