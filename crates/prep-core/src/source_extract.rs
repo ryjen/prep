@@ -155,7 +155,7 @@ pub fn extract_verified_ustar(
     Err(SourceExtractionError::UnsafeTarget)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::read_verified_ustar_snapshot;
