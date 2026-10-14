@@ -702,7 +702,11 @@ pub(crate) fn configure_process_group(command: &mut Command) {
 #[cfg(not(unix))]
 pub(crate) fn configure_process_group(_command: &mut Command) {}
 
-pub(crate) fn terminate_and_reap(child: &mut Child, process_group_id: u32, grace: Duration) -> io::Result<()> {
+pub(crate) fn terminate_and_reap(
+    child: &mut Child,
+    process_group_id: u32,
+    grace: Duration,
+) -> io::Result<()> {
     #[cfg(unix)]
     {
         let term_sent = signal_process_group(process_group_id, "-TERM").unwrap_or(false);
