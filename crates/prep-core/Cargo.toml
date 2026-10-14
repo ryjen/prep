@@ -12,7 +12,7 @@ prep-store = { path = "../prep-store", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-cap-std = "=4.0.3"
+rustix = { version = "=1.1.5", features = ["fs"] }
 
 [lints]
 workspace = true
