@@ -2,9 +2,7 @@
 //! response is only an object ID candidate; it does not prove commit type,
 //! provenance or a safely materialized checkout.
 use crate::git_command::{parse_exact_git_ref, prepare_exact_git_ref_resolution};
-use crate::plugin::{
-    cleanup_remaining_process_group, configure_process_group, terminate_and_reap,
-};
+use crate::plugin::{cleanup_remaining_process_group, configure_process_group, terminate_and_reap};
 use prep_manifest::GitCommit;
 use std::fmt;
 use std::io::{self, Read};
@@ -73,8 +71,10 @@ pub fn resolve_git_reference(
     parse_exact_git_ref(&output, full_ref).map_err(GitResolutionError::Io)
 }
 
-fn stdout_reader(mut stdout: impl Read + Send + 'static, maximum: usize)
-    -> Receiver<io::Result<Vec<u8>>> {
+fn stdout_reader(
+    mut stdout: impl Read + Send + 'static,
+    maximum: usize,
+) -> Receiver<io::Result<Vec<u8>>> {
     let (tx, rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -98,8 +98,10 @@ fn capture_bounded(
     mut command: Command,
     limits: GitResolutionLimits,
 ) -> Result<Vec<u8>, GitResolutionError> {
-    if limits.timeout.is_zero() || limits.timeout > MAX_RUNTIME
-        || limits.max_stdout_bytes == 0 || limits.max_stdout_bytes > MAX_REF_OUTPUT
+    if limits.timeout.is_zero()
+        || limits.timeout > MAX_RUNTIME
+        || limits.max_stdout_bytes == 0
+        || limits.max_stdout_bytes > MAX_REF_OUTPUT
     {
         return Err(GitResolutionError::InvalidPolicy);
     }
@@ -110,9 +112,10 @@ fn capture_bounded(
         .stderr(Stdio::null())
         .spawn()?;
     let id = child.id();
-    let stdout = child.stdout.take().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::BrokenPipe, "missing Git stdout pipe")
-    })?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "missing Git stdout pipe"))?;
     let rx = stdout_reader(stdout, limits.max_stdout_bytes);
     let deadline = Instant::now() + limits.timeout;
     let mut received: Option<io::Result<Vec<u8>>> = None;
@@ -130,7 +133,9 @@ fn capture_bounded(
             }
         }
         if received.as_ref().is_some_and(|result| {
-            result.as_ref().is_ok_and(|bytes| bytes.len() > limits.max_stdout_bytes)
+            result
+                .as_ref()
+                .is_ok_and(|bytes| bytes.len() > limits.max_stdout_bytes)
         }) {
             terminate(&mut child);
             return Err(GitResolutionError::OutputTooLarge);
@@ -148,7 +153,9 @@ fn capture_bounded(
                     };
                 }
                 cleanup_remaining_process_group(id, TERMINATION_GRACE);
-                let bytes = received.expect("reader returned").map_err(GitResolutionError::Io)?;
+                let bytes = received
+                    .expect("reader returned")
+                    .map_err(GitResolutionError::Io)?;
                 if bytes.len() > limits.max_stdout_bytes {
                     return Err(GitResolutionError::OutputTooLarge);
                 }
