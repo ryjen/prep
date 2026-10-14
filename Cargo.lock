@@ -159,6 +159,7 @@ dependencies = [
 name = "prep-store"
 version = "0.1.0"
 dependencies = [
+ "rustix",
  "serde",
  "sha2",
  "toml",
