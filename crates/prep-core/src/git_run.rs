@@ -284,31 +284,43 @@ mod tests {
             Err(GitResolutionError::UnexpectedObjectType)
         ));
         let tree = Command::new("git")
-            .arg("-C").arg(&directory).arg("mktree")
-            .output().unwrap();
+            .arg("-C")
+            .arg(&directory)
+            .arg("mktree")
+            .output()
+            .unwrap();
         assert!(tree.status.success());
         let tree_id = String::from_utf8(tree.stdout).unwrap();
         let commit = Command::new("git")
-            .arg("-C").arg(&directory)
-            .arg("-c").arg("user.name=Test")
-            .arg("-c").arg("user.email=test@example.invalid")
-            .arg("commit-tree").arg(tree_id.trim())
-            .arg("-m").arg("initial")
-            .output().unwrap();
+            .arg("-C")
+            .arg(&directory)
+            .arg("-c")
+            .arg("user.name=Test")
+            .arg("-c")
+            .arg("user.email=test@example.invalid")
+            .arg("commit-tree")
+            .arg(tree_id.trim())
+            .arg("-m")
+            .arg("initial")
+            .output()
+            .unwrap();
         assert!(commit.status.success());
-        let commit_id = GitCommit::parse(
-            String::from_utf8(commit.stdout).unwrap().trim()
-        ).unwrap();
-        assert!(inspect_git_commit_type(
-            Path::new("git"),
-            &directory,
-            &commit_id,
-            GitResolutionLimits::default()
-        ).is_ok());
+        let commit_id = GitCommit::parse(String::from_utf8(commit.stdout).unwrap().trim()).unwrap();
+        assert!(
+            inspect_git_commit_type(
+                Path::new("git"),
+                &directory,
+                &commit_id,
+                GitResolutionLimits::default()
+            )
+            .is_ok()
+        );
         let nonexistent = GitCommit::parse("0".repeat(40)).unwrap();
         assert!(matches!(
             inspect_git_commit_type(
-                Path::new("git"), &directory, &nonexistent,
+                Path::new("git"),
+                &directory,
+                &nonexistent,
                 GitResolutionLimits::default()
             ),
             Err(GitResolutionError::Unsuccessful)
