@@ -54,6 +54,8 @@ pub use source_load::{
     SourceLoadError, extract_staged_ustar, load_cached_ustar, load_staged_ustar,
 };
 
-pub use git_run::{GitResolutionError, GitResolutionLimits, inspect_git_commit_type, resolve_git_reference};
+pub use git_run::{
+    GitResolutionError, GitResolutionLimits, inspect_git_commit_type, resolve_git_reference,
+};
 
 pub use source_extract::{SourceExtractionError, extract_verified_ustar};
