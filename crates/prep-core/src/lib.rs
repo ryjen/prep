@@ -8,8 +8,8 @@ mod identity;
 mod plugin;
 mod plugin_input;
 mod source;
-mod source_load;
 mod source_extract;
+mod source_load;
 mod verified_ustar;
 
 pub use graph::{DependencyGraph, GraphError};
