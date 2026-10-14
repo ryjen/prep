@@ -157,6 +157,24 @@ pub fn prepare_exact_git_ref_resolution(
     Ok(command)
 }
 
+/// Prepare a *read-only*, isolated object-kind check in an already obtained
+/// repository. The repository directory must be operator/store-owned, not a
+/// path selected by untrusted Git tree data. This does not fetch or checkout.
+pub fn prepare_locked_commit_kind_inspection(
+    executable: &Path,
+    repository: &Path,
+    object_id: &GitCommit,
+) -> Command {
+    let mut command = isolated_git_command(executable);
+    command
+        .arg("-C")
+        .arg(repository)
+        .arg("cat-file")
+        .arg("-t")
+        .arg(object_id.as_str());
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
