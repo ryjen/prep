@@ -50,7 +50,9 @@ pub use verified_ustar::{
     MAX_ARCHIVE_SNAPSHOT_BYTES, VerifiedUstarSnapshot, read_verified_ustar_snapshot,
 };
 
-pub use source_load::{SourceLoadError, load_cached_ustar, load_staged_ustar};
+pub use source_load::{
+    SourceLoadError, extract_staged_ustar, load_cached_ustar, load_staged_ustar,
+};
 
 pub use git_run::{GitResolutionError, GitResolutionLimits, resolve_git_reference};
 

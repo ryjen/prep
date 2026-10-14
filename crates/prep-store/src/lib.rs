@@ -702,6 +702,64 @@ impl UnverifiedSourceStage {
         Ok(file)
     }
 
+    /// Allocate exactly one private, unverified source tree beneath this leased
+    /// stage and return a directory FD. No host path derived from archive input
+    /// is used here. A dropped stage removes the tree; it is never a build result.
+    #[cfg(unix)]
+    pub fn begin_unverified_source_tree(&self) -> Result<File, StoreError> {
+        use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+
+        let _store_lock = self.store.lock_store()?;
+        verify_real_directory_within(
+            &self.store.source_staging_root,
+            &self.path,
+            "source staging transaction",
+        )?;
+        let id = self
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| StoreError::InvalidPath("nonportable source stage id".to_owned()))?;
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let root_fd = open(&self.store.source_staging_root, flags, Mode::empty()).map_err(|e| {
+            io_error(
+                "open source stage root descriptor",
+                &self.store.source_staging_root,
+                std::io::Error::from_raw_os_error(e.raw_os_error()),
+            )
+        })?;
+        let stage_fd = openat(&root_fd, id, flags, Mode::empty()).map_err(|e| {
+            io_error(
+                "open leased source stage descriptor",
+                &self.path,
+                std::io::Error::from_raw_os_error(e.raw_os_error()),
+            )
+        })?;
+        let tree_path = self.path.join("tree");
+        mkdirat(&stage_fd, "tree", Mode::from_bits_truncate(0o700)).map_err(|e| {
+            io_error(
+                "create private unverified tree",
+                &tree_path,
+                std::io::Error::from_raw_os_error(e.raw_os_error()),
+            )
+        })?;
+        let tree_fd = openat(&stage_fd, "tree", flags, Mode::empty()).map_err(|e| {
+            io_error(
+                "open private unverified tree",
+                &tree_path,
+                std::io::Error::from_raw_os_error(e.raw_os_error()),
+            )
+        })?;
+        Ok(File::from(tree_fd))
+    }
+
+    #[cfg(not(unix))]
+    pub fn begin_unverified_source_tree(&self) -> Result<File, StoreError> {
+        Err(StoreError::InvalidPath(
+            "descriptor-relative source tree staging is not supported on this platform".to_owned(),
+        ))
+    }
+
     #[cfg(test)]
     fn leave_abandoned(mut self) -> Result<(PathBuf, PathBuf), StoreError> {
         if let Some(lease) = self.lease.take() {
@@ -1630,6 +1688,36 @@ mod tests {
             interrupted: false,
         };
         assert_eq!(stage.spool_unverified_archive(&mut input, 3).unwrap(), 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_source_tree_is_single_use_and_reaped_with_stage() {
+        let temp = TestDirectory::new("leased-source-tree");
+        let store = Store::open(&temp.0.join("store")).unwrap();
+        let stage = store.begin_unverified_source().unwrap();
+        let directory = stage.begin_unverified_source_tree().unwrap();
+        let tree = stage.untrusted_path().join("tree");
+        assert!(tree.is_dir());
+        assert!(stage.begin_unverified_source_tree().is_err());
+        assert_eq!(store.recover_abandoned().unwrap(), 0);
+        drop(directory);
+        drop(stage);
+        assert!(!tree.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn leased_source_tree_rejects_preexisting_symlink() {
+        use std::os::unix::fs::symlink;
+        let temp = TestDirectory::new("source-tree-symlink");
+        let store = Store::open(&temp.0.join("store")).unwrap();
+        let stage = store.begin_unverified_source().unwrap();
+        let outside = temp.0.join("outside");
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, stage.untrusted_path().join("tree")).unwrap();
+        assert!(stage.begin_unverified_source_tree().is_err());
+        assert!(outside.is_dir());
     }
 
     #[test]
