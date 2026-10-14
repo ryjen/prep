@@ -695,14 +695,14 @@ fn read_bounded_line(
 }
 
 #[cfg(unix)]
-fn configure_process_group(command: &mut Command) {
+pub(crate) fn configure_process_group(command: &mut Command) {
     command.process_group(0);
 }
 
 #[cfg(not(unix))]
-fn configure_process_group(_command: &mut Command) {}
+pub(crate) fn configure_process_group(_command: &mut Command) {}
 
-fn terminate_and_reap(child: &mut Child, process_group_id: u32, grace: Duration) -> io::Result<()> {
+pub(crate) fn terminate_and_reap(child: &mut Child, process_group_id: u32, grace: Duration) -> io::Result<()> {
     #[cfg(unix)]
     {
         let term_sent = signal_process_group(process_group_id, "-TERM").unwrap_or(false);
@@ -742,7 +742,7 @@ fn terminate_and_reap(child: &mut Child, process_group_id: u32, grace: Duration)
 }
 
 #[cfg(unix)]
-fn cleanup_remaining_process_group(process_group_id: u32, grace: Duration) {
+pub(crate) fn cleanup_remaining_process_group(process_group_id: u32, grace: Duration) {
     if !process_group_exists(process_group_id).unwrap_or(false) {
         return;
     }
@@ -759,7 +759,7 @@ fn cleanup_remaining_process_group(process_group_id: u32, grace: Duration) {
 }
 
 #[cfg(not(unix))]
-fn cleanup_remaining_process_group(_process_group_id: u32, _grace: Duration) {}
+pub(crate) fn cleanup_remaining_process_group(_process_group_id: u32, _grace: Duration) {}
 
 #[cfg(unix)]
 fn signal_process_group(process_group_id: u32, signal: &str) -> io::Result<bool> {
