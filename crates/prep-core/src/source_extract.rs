@@ -6,8 +6,8 @@ use crate::{
     ArchiveEntryKind, ArchiveLimits, SourceVerificationError, VerifiedUstarSnapshot,
     validate_archive_inventory,
 };
-use std::fs::File;
 use std::fmt;
+use std::fs::File;
 use std::io::{self, Write};
 
 #[derive(Debug)]
@@ -65,13 +65,16 @@ fn ensure_subdirectory(
 ) -> Result<rustix::fd::OwnedFd, SourceExtractionError> {
     use rustix::fs::{Mode, OFlags, mkdirat, openat};
     match mkdirat(parent, component, Mode::from_bits_truncate(0o700)) {
-        Ok(()) => { created.insert(relative_path.to_owned()); }
+        Ok(()) => {
+            created.insert(relative_path.to_owned());
+        }
         Err(rustix::io::Errno::EXIST) if created.contains(relative_path) => {}
         Err(rustix::io::Errno::EXIST) => return Err(SourceExtractionError::UnsafeTarget),
         Err(error) => return Err(error.into()),
     }
     Ok(openat(
-        parent, component,
+        parent,
+        component,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         Mode::empty(),
     )?)
@@ -95,14 +98,17 @@ pub fn extract_verified_ustar(
     let mut written = 0u64;
     for entry in snapshot.inventory() {
         let mut parent = openat(
-            destination, ".",
+            destination,
+            ".",
             OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
             Mode::empty(),
         )?;
         let mut components = entry.name.split('/').peekable();
         let mut relative_path = String::new();
         while let Some(component) = components.next() {
-            if !relative_path.is_empty() { relative_path.push('/'); }
+            if !relative_path.is_empty() {
+                relative_path.push('/');
+            }
             relative_path.push_str(component);
             if components.peek().is_some() || entry.kind == ArchiveEntryKind::Directory {
                 parent = ensure_subdirectory(&parent, component, &relative_path, &mut created)?;
@@ -111,20 +117,22 @@ pub fn extract_verified_ustar(
             if entry.kind != ArchiveEntryKind::RegularFile {
                 return Err(SourceVerificationError::UnsafeEntryPath.into());
             }
-            let bytes = snapshot.file_bytes(&entry.name)
+            let bytes = snapshot
+                .file_bytes(&entry.name)
                 .ok_or(SourceVerificationError::UnsafeEntryPath)?;
             if bytes.len() as u64 != entry.expanded_bytes {
                 return Err(SourceVerificationError::IdentityMismatch.into());
             }
-            written = written.checked_add(bytes.len() as u64)
+            written = written
+                .checked_add(bytes.len() as u64)
                 .ok_or(SourceVerificationError::TooLarge)?;
             if written > limits.max_total_bytes || bytes.len() as u64 > limits.max_entry_bytes {
                 return Err(SourceVerificationError::TooLarge.into());
             }
             let fd = openat(
-                &parent, component,
-                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL
-                    | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                &parent,
+                component,
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
                 Mode::from_bits_truncate(0o600),
             )?;
             let mut file = File::from(fd);
