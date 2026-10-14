@@ -12,12 +12,14 @@ use std::io::Cursor;
 pub enum SourceLoadError {
     Store(StoreError),
     Verification(SourceVerificationError),
+    Extraction(crate::SourceExtractionError),
 }
 impl fmt::Display for SourceLoadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Store(error) => write!(formatter, "source store: {error}"),
             Self::Verification(error) => write!(formatter, "source verification: {error}"),
+            Self::Extraction(error) => write!(formatter, "source extraction: {error}"),
         }
     }
 }
@@ -31,6 +33,24 @@ impl From<SourceVerificationError> for SourceLoadError {
     fn from(error: SourceVerificationError) -> Self {
         Self::Verification(error)
     }
+}
+
+impl From<crate::SourceExtractionError> for SourceLoadError {
+    fn from(error: crate::SourceExtractionError) -> Self { Self::Extraction(error) }
+}
+
+/// Validate the locked archive and write its safe members ONLY into a leased,
+/// private, unverified source stage. This returns a byte count, not a trusted
+/// source tree handle; the caller must discard the stage if any step fails.
+pub fn extract_staged_ustar(
+    stage: &UnverifiedSourceStage,
+    lock: &LockedSource,
+    limits: ArchiveLimits,
+    maximum: u64,
+) -> Result<u64, SourceLoadError> {
+    let snapshot = load_staged_ustar(stage, lock, limits, maximum)?;
+    let destination = stage.begin_unverified_source_tree()?;
+    Ok(crate::extract_verified_ustar(&snapshot, &destination, limits)?)
 }
 
 /// Ingest staged but unverified archive bytes into an independently locked,
@@ -151,6 +171,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(verified.file_bytes("readme.txt"), Some(&b"hello"[..]));
+        assert_eq!(
+            extract_staged_ustar(
+                &stage,
+                &source,
+                ArchiveLimits::default(),
+                bytes.len() as u64,
+            ).unwrap(),
+            5
+        );
+        assert_eq!(
+            fs::read(stage.untrusted_path().join("tree/readme.txt")).unwrap(),
+            b"hello"
+        );
+        assert!(extract_staged_ustar(
+            &stage, &source, ArchiveLimits::default(), bytes.len() as u64
+        ).is_err());
+
         store
             .cache_source_blob(&stage, digest, bytes.len() as u64)
             .unwrap();
