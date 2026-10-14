@@ -2,6 +2,7 @@ mod archive_policy;
 mod archive_tar;
 mod git_command;
 mod git_tree;
+mod git_run;
 mod graph;
 mod identity;
 mod plugin;
@@ -49,3 +50,5 @@ pub use verified_ustar::{
 };
 
 pub use source_load::{SourceLoadError, load_cached_ustar, load_staged_ustar};
+
+pub use git_run::{GitResolutionError, GitResolutionLimits, resolve_git_reference};
