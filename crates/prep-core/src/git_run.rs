@@ -1,7 +1,9 @@
 //! Bounded execution for *read-only* Git reference resolution. A successful
 //! response is only an object ID candidate; it does not prove commit type,
 //! provenance or a safely materialized checkout.
-use crate::git_command::{parse_exact_git_ref, prepare_exact_git_ref_resolution};
+use crate::git_command::{
+    parse_exact_git_ref, prepare_exact_git_ref_resolution, prepare_locked_commit_kind_inspection,
+};
 use crate::plugin::{cleanup_remaining_process_group, configure_process_group, terminate_and_reap};
 use prep_manifest::GitCommit;
 use std::fmt;
@@ -24,6 +26,7 @@ pub enum GitResolutionError {
     Timeout,
     OutputTooLarge,
     Unsuccessful,
+    UnexpectedObjectType,
 }
 impl fmt::Display for GitResolutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -33,6 +36,7 @@ impl fmt::Display for GitResolutionError {
             Self::Timeout => f.write_str("Git source resolution exceeded its deadline"),
             Self::OutputTooLarge => f.write_str("Git source resolution response exceeds limit"),
             Self::Unsuccessful => f.write_str("Git source resolution process failed"),
+            Self::UnexpectedObjectType => f.write_str("locked Git object is not a commit"),
         }
     }
 }
@@ -69,6 +73,29 @@ pub fn resolve_git_reference(
     let command = prepare_exact_git_ref_resolution(executable, remote, full_ref)?;
     let output = capture_bounded(command, limits)?;
     parse_exact_git_ref(&output, full_ref).map_err(GitResolutionError::Io)
+}
+
+/// Inspect an already available, pinned Git object without fetching or
+/// executing checkout operations. The repository path must be store-owned.
+/// A valid result verifies only the Git object *kind*, not the tree contents
+/// or its provenance, and grants no source/build publication authority.
+pub fn inspect_git_commit_type(
+    executable: &Path,
+    repository: &Path,
+    commit: &GitCommit,
+    limits: GitResolutionLimits,
+) -> Result<(), GitResolutionError> {
+    let command = prepare_locked_commit_kind_inspection(executable, repository, commit);
+    let output = capture_bounded(command, limits)?;
+    verify_commit_type_output(&output)
+}
+
+fn verify_commit_type_output(output: &[u8]) -> Result<(), GitResolutionError> {
+    if output == b"commit\n" {
+        Ok(())
+    } else {
+        Err(GitResolutionError::UnexpectedObjectType)
+    }
 }
 
 fn stdout_reader(
@@ -187,6 +214,25 @@ mod tests {
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(script);
         command
+    }
+
+    #[test]
+    fn commit_object_kind_must_match_the_exact_response() {
+        assert!(verify_commit_type_output(b"commit\n").is_ok());
+        for output in [
+            &b"blob\n"[..],
+            &b"tree\n"[..],
+            &b"tag\n"[..],
+            &b"commit"[..],
+            &b"commit\r\n"[..],
+            &b"commit\nextra"[..],
+            &b""[..],
+        ] {
+            assert!(matches!(
+                verify_commit_type_output(output),
+                Err(GitResolutionError::UnexpectedObjectType)
+            ));
+        }
     }
 
     #[test]
