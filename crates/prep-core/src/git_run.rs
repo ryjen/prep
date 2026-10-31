@@ -1,7 +1,9 @@
 //! Bounded execution for *read-only* Git reference resolution. A successful
 //! response is only an object ID candidate; it does not prove commit type,
 //! provenance or a safely materialized checkout.
-use crate::git_command::{parse_exact_git_ref, prepare_exact_git_ref_resolution};
+use crate::git_command::{
+    parse_exact_git_ref, prepare_exact_git_ref_resolution, prepare_locked_commit_kind_inspection,
+};
 use crate::plugin::{cleanup_remaining_process_group, configure_process_group, terminate_and_reap};
 use prep_manifest::GitCommit;
 use std::fmt;
@@ -24,6 +26,7 @@ pub enum GitResolutionError {
     Timeout,
     OutputTooLarge,
     Unsuccessful,
+    UnexpectedObjectType,
 }
 impl fmt::Display for GitResolutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -33,6 +36,7 @@ impl fmt::Display for GitResolutionError {
             Self::Timeout => f.write_str("Git source resolution exceeded its deadline"),
             Self::OutputTooLarge => f.write_str("Git source resolution response exceeds limit"),
             Self::Unsuccessful => f.write_str("Git source resolution process failed"),
+            Self::UnexpectedObjectType => f.write_str("locked Git object is not a commit"),
         }
     }
 }
@@ -69,6 +73,29 @@ pub fn resolve_git_reference(
     let command = prepare_exact_git_ref_resolution(executable, remote, full_ref)?;
     let output = capture_bounded(command, limits)?;
     parse_exact_git_ref(&output, full_ref).map_err(GitResolutionError::Io)
+}
+
+/// Inspect an already available, pinned Git object without fetching or
+/// executing checkout operations. The repository path must be store-owned.
+/// A valid result verifies only the Git object *kind*, not the tree contents
+/// or its provenance, and grants no source/build publication authority.
+pub fn inspect_git_commit_type(
+    executable: &Path,
+    repository: &Path,
+    commit: &GitCommit,
+    limits: GitResolutionLimits,
+) -> Result<(), GitResolutionError> {
+    let command = prepare_locked_commit_kind_inspection(executable, repository, commit);
+    let output = capture_bounded(command, limits)?;
+    verify_commit_type_output(&output)
+}
+
+fn verify_commit_type_output(output: &[u8]) -> Result<(), GitResolutionError> {
+    if output == b"commit\n" {
+        Ok(())
+    } else {
+        Err(GitResolutionError::UnexpectedObjectType)
+    }
 }
 
 fn stdout_reader(
@@ -187,6 +214,118 @@ mod tests {
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(script);
         command
+    }
+
+    #[test]
+    fn commit_object_kind_must_match_the_exact_response() {
+        assert!(verify_commit_type_output(b"commit\n").is_ok());
+        for output in [
+            &b"blob\n"[..],
+            &b"tree\n"[..],
+            &b"tag\n"[..],
+            &b"commit"[..],
+            &b"commit\r\n"[..],
+            &b"commit\nextra"[..],
+            &b""[..],
+        ] {
+            assert!(matches!(
+                verify_commit_type_output(output),
+                Err(GitResolutionError::UnexpectedObjectType)
+            ));
+        }
+    }
+
+    #[test]
+    fn inspect_real_local_git_blob_fails_commit_kind_gate() {
+        use std::io::Write;
+        use std::process::Stdio;
+        let directory = std::env::temp_dir().join(format!(
+            "prep-git-type-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let init = Command::new("git")
+            .arg("init")
+            .arg("--bare")
+            .arg("-q")
+            .arg(&directory)
+            .status()
+            .unwrap();
+        assert!(init.success());
+        let mut hash = Command::new("git")
+            .arg("--git-dir")
+            .arg(&directory)
+            .arg("hash-object")
+            .arg("-w")
+            .arg("--stdin")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        hash.stdin
+            .take()
+            .unwrap()
+            .write_all(b"not a commit")
+            .unwrap();
+        let output = hash.wait_with_output().unwrap();
+        assert!(output.status.success());
+        let object = GitCommit::parse(String::from_utf8(output.stdout).unwrap().trim()).unwrap();
+        assert!(matches!(
+            inspect_git_commit_type(
+                Path::new("git"),
+                &directory,
+                &object,
+                GitResolutionLimits::default()
+            ),
+            Err(GitResolutionError::UnexpectedObjectType)
+        ));
+        let tree = Command::new("git")
+            .arg("-C")
+            .arg(&directory)
+            .arg("mktree")
+            .output()
+            .unwrap();
+        assert!(tree.status.success());
+        let tree_id = String::from_utf8(tree.stdout).unwrap();
+        let commit = Command::new("git")
+            .arg("-C")
+            .arg(&directory)
+            .arg("-c")
+            .arg("user.name=Test")
+            .arg("-c")
+            .arg("user.email=test@example.invalid")
+            .arg("commit-tree")
+            .arg(tree_id.trim())
+            .arg("-m")
+            .arg("initial")
+            .output()
+            .unwrap();
+        assert!(commit.status.success());
+        let commit_id = GitCommit::parse(String::from_utf8(commit.stdout).unwrap().trim()).unwrap();
+        assert!(
+            inspect_git_commit_type(
+                Path::new("git"),
+                &directory,
+                &commit_id,
+                GitResolutionLimits::default()
+            )
+            .is_ok()
+        );
+        let nonexistent = GitCommit::parse("0".repeat(40)).unwrap();
+        assert!(matches!(
+            inspect_git_commit_type(
+                Path::new("git"),
+                &directory,
+                &nonexistent,
+                GitResolutionLimits::default()
+            ),
+            Err(GitResolutionError::Unsuccessful)
+        ));
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
